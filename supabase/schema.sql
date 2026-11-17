@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
 -- Script de Base de Datos para Supabase (PostgreSQL)
--- Versión: 1.0.0
+-- Versión: 1.1.0 (Actualizado: Catálogo Maestro con Nombre y Familias)
 -- ==============================================================================
 
 -- 1. EXTENSIONES NECESARIAS
@@ -12,7 +12,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- 2. TABLAS PRINCIPALES
 -- ==============================================================================
 
--- 2.1 TABLA DE PERFILES DE USUARIO (Vinculada a auth.users de Supabase)
+-- 2.1 TABLA DE PERFILES DE USUARIO
 CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
@@ -25,19 +25,31 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 -- 2.2 TABLA DE PRODUCTOS (Catálogo maestro de referencias comerciales)
 CREATE TABLE IF NOT EXISTS public.products (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    internal_code TEXT NOT NULL,           -- Código interno o familia (ej. AF-100, OSVK-704)
-    part_number TEXT NOT NULL,             -- Part Number original (ej. 1613610500)
-    description TEXT NOT NULL,             -- Descripción del producto (ej. Filtro de Aceite)
-    category TEXT DEFAULT 'Repuestos',     -- Categoría (ej. Filtros, Válvulas, Kits)
-    brand TEXT,                            -- Marca o fabricante (ej. Atlas Copco, Sullair, etc.)
+    internal_code TEXT NOT NULL,           -- Grupo o familia (ej. AF-100, OF-100, OSVK-704, MMK-700, MK-100)
+    part_number TEXT NOT NULL,             -- Part Number original del fabricante (ej. 1613610500)
+    name TEXT NOT NULL,                    -- Nombre completo del producto (ej. Oil Filter)
+    description TEXT NOT NULL,             -- Descripción técnica (ej. Filtro de aceite para compresor)
+    category TEXT DEFAULT 'Repuestos',     -- Categoría
+    brand TEXT,                            -- Marca o fabricante
     unit_of_measure TEXT DEFAULT 'UND',    -- Unidad de medida (UND, JGO, METRO)
     min_stock INTEGER NOT NULL DEFAULT 5 CHECK (min_stock >= 0), -- Stock mínimo de alerta
-    warehouse_location TEXT,               -- Ubicación en almacén (ej. Estante A-2, Nivel 3)
+    warehouse_location TEXT,               -- Ubicación en almacén
     notes TEXT,                            -- Observaciones
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_product_part_number UNIQUE (part_number)
 );
+
+-- Si la tabla ya existía sin la columna name, la agregamos de forma segura:
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'products' AND column_name = 'name') THEN
+        ALTER TABLE public.products ADD COLUMN name TEXT DEFAULT 'Repuesto';
+        -- Inicializar name con la descripción si estaba vacío
+        UPDATE public.products SET name = description WHERE name IS NULL OR name = 'Repuesto';
+        ALTER TABLE public.products ALTER COLUMN name SET NOT NULL;
+    END IF;
+END $$;
 
 -- 2.3 TABLA DE UNIDADES FÍSICAS (Stickers con códigos alfanuméricos individuales)
 CREATE TABLE IF NOT EXISTS public.inventory_units (
@@ -55,19 +67,19 @@ CREATE TABLE IF NOT EXISTS public.inventory_movements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     unit_id UUID NOT NULL REFERENCES public.inventory_units(id) ON DELETE RESTRICT,
     product_id UUID NOT NULL REFERENCES public.products(id) ON DELETE RESTRICT,
-    unit_code TEXT NOT NULL,               -- Guardado directo para consultas rápidas
+    unit_code TEXT NOT NULL,
     movement_type TEXT NOT NULL CHECK (movement_type IN ('INGRESO', 'SALIDA', 'DEVOLUCION')),
-    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity = 1), -- Siempre 1 unidad por sticker
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity = 1),
     user_id UUID REFERENCES auth.users(id),
     user_email TEXT,
-    worker_name TEXT,                      -- Trabajador que retira / entrega (Opcional)
-    client_name TEXT,                      -- Cliente asignado (Opcional)
-    equipment_model TEXT,                  -- Equipo o modelo destino (Opcional)
-    equipment_serial TEXT,                 -- Número de serie del equipo (Opcional)
-    reason TEXT,                           -- Motivo de salida / devolución (Opcional)
-    supplier TEXT,                         -- Proveedor / Procedencia (Opcional, para ingresos)
-    document_reference TEXT,               -- Nro Guía / Orden de Compra (Opcional)
-    notes TEXT,                            -- Observaciones adicionales (Opcional)
+    worker_name TEXT,
+    client_name TEXT,
+    equipment_model TEXT,
+    equipment_serial TEXT,
+    reason TEXT,
+    supplier TEXT,
+    document_reference TEXT,
+    notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -77,6 +89,7 @@ CREATE TABLE IF NOT EXISTS public.inventory_movements (
 
 CREATE INDEX IF NOT EXISTS idx_products_internal_code ON public.products(internal_code);
 CREATE INDEX IF NOT EXISTS idx_products_part_number ON public.products(part_number);
+CREATE INDEX IF NOT EXISTS idx_products_name ON public.products(name);
 CREATE INDEX IF NOT EXISTS idx_inventory_units_product_id ON public.inventory_units(product_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_units_status ON public.inventory_units(status);
 CREATE INDEX IF NOT EXISTS idx_inventory_units_unit_code ON public.inventory_units(unit_code);
@@ -86,14 +99,16 @@ CREATE INDEX IF NOT EXISTS idx_inventory_movements_created_at ON public.inventor
 CREATE INDEX IF NOT EXISTS idx_inventory_movements_type ON public.inventory_movements(movement_type);
 
 -- ==============================================================================
--- 4. VISTA RESUMEN DE STOCK Y ALERTAS POR PRODUCTO
+-- 4. VISTAS RESUMEN DE INVENTARIO
 -- ==============================================================================
 
+-- 4.1 Resumen por Producto Individual
 CREATE OR REPLACE VIEW public.v_product_stock_summary AS
 SELECT 
     p.id AS product_id,
     p.internal_code,
     p.part_number,
+    p.name,
     p.description,
     p.category,
     p.brand,
@@ -114,11 +129,23 @@ FROM public.products p
 LEFT JOIN public.inventory_units u ON p.id = u.product_id
 GROUP BY p.id;
 
+-- 4.2 Resumen Agrupado por Grupo / Familia (Para Dashboard INDUSTRAC)
+CREATE OR REPLACE VIEW public.v_family_stock_summary AS
+SELECT 
+    p.internal_code AS family_code,
+    COUNT(DISTINCT p.id) AS total_products,
+    COUNT(u.id) AS total_units,
+    COUNT(CASE WHEN u.status = 'DISPONIBLE' THEN 1 END) AS available_units,
+    COUNT(CASE WHEN u.status = 'RETIRADO' THEN 1 END) AS withdrawn_units
+FROM public.products p
+LEFT JOIN public.inventory_units u ON p.id = u.product_id
+GROUP BY p.internal_code
+ORDER BY p.internal_code ASC;
+
 -- ==============================================================================
--- 5. FUNCIONES Y DISPARADORES (TRIGGERS)
+-- 5. FUNCIONES Y DISPARADORES
 -- ==============================================================================
 
--- Función para actualizar campo updated_at automáticamente
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -139,7 +166,6 @@ CREATE OR REPLACE TRIGGER trg_profiles_updated_at
 BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
--- Función para crear perfil automáticamente al registrar usuario en Supabase Auth
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -147,7 +173,6 @@ DECLARE
     initial_role TEXT;
 BEGIN
     SELECT COUNT(*) INTO user_count FROM public.profiles;
-    -- El primer usuario registrado se convierte en admin automáticamente
     IF user_count = 0 THEN
         initial_role := 'admin';
     ELSE
@@ -173,7 +198,45 @@ FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 -- 6. OPERACIONES TRANSACCIONALES ATÓMICAS (RPC)
 -- ==============================================================================
 
--- 6.1 RPC: REGISTRAR INGRESO DE UNIDAD INDIVIDUAL
+-- 6.1 RPC: OBTENER SIGUIENTE CORRELATIVO SEGURO POR GRUPO / FAMILIA
+CREATE OR REPLACE FUNCTION public.get_next_correlative(p_family_code TEXT)
+RETURNS JSON AS $$
+DECLARE
+    v_clean_prefix TEXT;
+    v_max_num BIGINT;
+    v_next_num BIGINT;
+    v_last_code TEXT;
+    v_next_code TEXT;
+BEGIN
+    -- Estandarizar prefijo (ej. 'AF-100' -> 'AF-100-')
+    v_clean_prefix := UPPER(TRIM(p_family_code));
+    IF NOT v_clean_prefix LIKE '%-' THEN
+        v_clean_prefix := v_clean_prefix || '-';
+    END IF;
+
+    -- Buscar el número correlativo más alto registrado con este prefijo
+    SELECT 
+        COALESCE(MAX(NULLIF(regexp_replace(substring(unit_code FROM length(v_clean_prefix) + 1), '[^0-9]', '', 'g'), '')::BIGINT), 0),
+        MAX(unit_code)
+    INTO v_max_num, v_last_code
+    FROM public.inventory_units
+    WHERE unit_code LIKE v_clean_prefix || '%';
+
+    v_next_num := v_max_num + 1;
+    v_next_code := v_clean_prefix || lpad(v_next_num::TEXT, 5, '0');
+
+    RETURN json_build_object(
+        'family_prefix', v_clean_prefix,
+        'has_existing_units', (v_max_num > 0),
+        'last_correlative_number', v_max_num,
+        'last_code', CASE WHEN v_max_num > 0 THEN v_last_code ELSE NULL END,
+        'next_correlative_number', v_next_num,
+        'next_code', v_next_code
+    );
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
+
+-- 6.2 RPC: REGISTRAR INGRESO DE UNIDAD INDIVIDUAL
 CREATE OR REPLACE FUNCTION public.register_unit_entry(
     p_product_id UUID,
     p_unit_code TEXT,
@@ -190,22 +253,19 @@ DECLARE
     v_user_id UUID;
     v_user_email TEXT;
 BEGIN
-    -- Limpieza y estandarización del código (Mayúsculas sin espacios extremos)
     v_clean_code := UPPER(TRIM(p_unit_code));
 
     IF v_clean_code IS NULL OR v_clean_code = '' THEN
         RETURN json_build_object('success', false, 'error', 'El código de sticker no puede estar vacío.');
     END IF;
 
-    -- Validar existencia del producto
-    SELECT id, internal_code, part_number, description INTO v_product
+    SELECT id, internal_code, part_number, name, description INTO v_product
     FROM public.products WHERE id = p_product_id;
 
     IF NOT FOUND THEN
         RETURN json_build_object('success', false, 'error', 'El producto seleccionado no existe en el catálogo.');
     END IF;
 
-    -- Validar unicidad física del código individual
     SELECT id INTO v_existing_id FROM public.inventory_units WHERE unit_code = v_clean_code;
     IF v_existing_id IS NOT NULL THEN
         RETURN json_build_object(
@@ -214,16 +274,13 @@ BEGIN
         );
     END IF;
 
-    -- Identificar usuario actual
     v_user_id := auth.uid();
     SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
 
-    -- Insertar unidad física
     INSERT INTO public.inventory_units (product_id, unit_code, status)
     VALUES (p_product_id, v_clean_code, 'DISPONIBLE')
     RETURNING id INTO v_unit_id;
 
-    -- Registrar movimiento inmutable de INGRESO
     INSERT INTO public.inventory_movements (
         unit_id,
         product_id,
@@ -252,6 +309,7 @@ BEGIN
         'success', true,
         'unit_id', v_unit_id,
         'unit_code', v_clean_code,
+        'name', v_product.name,
         'product', v_product.description,
         'part_number', v_product.part_number,
         'message', 'Unidad ingresada correctamente con estado DISPONIBLE.'
@@ -259,8 +317,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-
--- 6.2 RPC: CONSULTAR ESTADO DE UNIDAD ANTES DE SALIDA (Para OCR / Entrada manual)
+-- 6.3 RPC: CONSULTAR ESTADO DE UNIDAD ANTES DE SALIDA (Para OCR / Entrada manual)
 CREATE OR REPLACE FUNCTION public.lookup_unit_for_exit(p_unit_code TEXT)
 RETURNS JSON AS $$
 DECLARE
@@ -276,6 +333,7 @@ BEGIN
         u.product_id,
         p.internal_code,
         p.part_number,
+        p.name,
         p.description,
         p.category,
         p.warehouse_location
@@ -301,6 +359,7 @@ BEGIN
         'product_id', v_unit.product_id,
         'internal_code', v_unit.internal_code,
         'part_number', v_unit.part_number,
+        'name', v_unit.name,
         'description', v_unit.description,
         'category', v_unit.category,
         'warehouse_location', v_unit.warehouse_location,
@@ -309,8 +368,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
 
-
--- 6.3 RPC: REGISTRAR SALIDA ATÓMICA DE UNIDAD
+-- 6.4 RPC: REGISTRAR SALIDA ATÓMICA DE UNIDAD
 CREATE OR REPLACE FUNCTION public.register_unit_exit(
     p_unit_code TEXT,
     p_worker_name TEXT DEFAULT NULL,
@@ -334,13 +392,14 @@ BEGIN
         RETURN json_build_object('success', false, 'error', 'Debe proporcionar un código de unidad.');
     END IF;
 
-    -- Bloqueo pesimista con FOR UPDATE para evitar salidas dobles o condiciones de carrera concurrentes
+    -- Bloqueo pesimista
     SELECT 
         u.id, 
         u.unit_code, 
         u.status, 
         u.product_id,
         p.part_number,
+        p.name,
         p.description
     INTO v_unit
     FROM public.inventory_units u
@@ -348,7 +407,6 @@ BEGIN
     WHERE u.unit_code = v_clean_code
     FOR UPDATE OF u;
 
-    -- Validación 1: El código existe?
     IF NOT FOUND THEN
         RETURN json_build_object(
             'success', false, 
@@ -356,7 +414,6 @@ BEGIN
         );
     END IF;
 
-    -- Validación 2: Ya fue retirado?
     IF v_unit.status = 'RETIRADO' THEN
         RETURN json_build_object(
             'success', false, 
@@ -364,7 +421,6 @@ BEGIN
         );
     END IF;
 
-    -- Validación 3: Debe estar en estado DISPONIBLE
     IF v_unit.status <> 'DISPONIBLE' THEN
         RETURN json_build_object(
             'success', false, 
@@ -372,17 +428,14 @@ BEGIN
         );
     END IF;
 
-    -- Obtener usuario autenticado
     v_user_id := auth.uid();
     SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
 
-    -- Actualizar estado de la unidad a RETIRADO
     UPDATE public.inventory_units
     SET status = 'RETIRADO',
         updated_at = NOW()
     WHERE id = v_unit.id;
 
-    -- Registrar movimiento inmutable de SALIDA
     INSERT INTO public.inventory_movements (
         unit_id,
         product_id,
@@ -418,6 +471,7 @@ BEGIN
         'success', true,
         'movement_id', v_movement_id,
         'unit_code', v_clean_code,
+        'name', v_unit.name,
         'description', v_unit.description,
         'part_number', v_unit.part_number,
         'worker_name', p_worker_name,
@@ -427,8 +481,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-
--- 6.4 RPC: REGISTRAR DEVOLUCIÓN DE UNIDAD
+-- 6.5 RPC: REGISTRAR DEVOLUCIÓN DE UNIDAD
 CREATE OR REPLACE FUNCTION public.register_unit_return(
     p_unit_code TEXT,
     p_worker_name TEXT DEFAULT NULL,
@@ -449,13 +502,13 @@ BEGIN
         RETURN json_build_object('success', false, 'error', 'Debe proporcionar un código de unidad.');
     END IF;
 
-    -- Bloqueo pesimista
     SELECT 
         u.id, 
         u.unit_code, 
         u.status, 
         u.product_id,
         p.part_number,
+        p.name,
         p.description
     INTO v_unit
     FROM public.inventory_units u
@@ -470,7 +523,6 @@ BEGIN
         );
     END IF;
 
-    -- Solo se puede devolver una unidad previamente RETIRADA
     IF v_unit.status <> 'RETIRADO' THEN
         RETURN json_build_object(
             'success', false, 
@@ -481,13 +533,11 @@ BEGIN
     v_user_id := auth.uid();
     SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
 
-    -- Revertir estado a DISPONIBLE
     UPDATE public.inventory_units
     SET status = 'DISPONIBLE',
         updated_at = NOW()
     WHERE id = v_unit.id;
 
-    -- Insertar nuevo movimiento de DEVOLUCION (conservando toda la trazabilidad anterior)
     INSERT INTO public.inventory_movements (
         unit_id,
         product_id,
@@ -517,13 +567,13 @@ BEGIN
         'success', true,
         'movement_id', v_movement_id,
         'unit_code', v_clean_code,
+        'name', v_unit.name,
         'description', v_unit.description,
         'part_number', v_unit.part_number,
         'message', 'Devolución registrada exitosamente. La unidad vuelve a estar DISPONIBLE.'
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
-
 
 -- ==============================================================================
 -- 7. SEGURIDAD Y ROW LEVEL SECURITY (RLS)
@@ -534,7 +584,6 @@ ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_units ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_movements ENABLE ROW LEVEL SECURITY;
 
--- Helper: Comprobar si el usuario actual es administrador
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN AS $$
 BEGIN
@@ -545,7 +594,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
 
--- 7.1 Políticas para PROFILES
 CREATE POLICY "Usuarios autenticados pueden ver perfiles" 
 ON public.profiles FOR SELECT TO authenticated USING (true);
 
@@ -554,7 +602,6 @@ ON public.profiles FOR UPDATE TO authenticated
 USING (auth.uid() = id OR public.is_admin())
 WITH CHECK (auth.uid() = id OR public.is_admin());
 
--- 7.2 Políticas para PRODUCTS (Catálogo Maestro)
 CREATE POLICY "Usuarios autenticados pueden consultar productos" 
 ON public.products FOR SELECT TO authenticated USING (true);
 
@@ -571,7 +618,6 @@ CREATE POLICY "Solo administradores pueden eliminar productos"
 ON public.products FOR DELETE TO authenticated 
 USING (public.is_admin());
 
--- 7.3 Políticas para INVENTORY_UNITS (Unidades Físicas)
 CREATE POLICY "Usuarios autenticados pueden consultar unidades" 
 ON public.inventory_units FOR SELECT TO authenticated USING (true);
 
@@ -584,16 +630,9 @@ ON public.inventory_units FOR UPDATE TO authenticated
 USING (true)
 WITH CHECK (true);
 
--- No se permite DELETE directo sobre inventory_units para evitar huérfanos históricos
-
--- 7.4 Políticas para INVENTORY_MOVEMENTS (Historial Inmutable)
 CREATE POLICY "Usuarios autenticados pueden consultar movimientos" 
 ON public.inventory_movements FOR SELECT TO authenticated USING (true);
 
 CREATE POLICY "Usuarios autenticados pueden insertar movimientos" 
 ON public.inventory_movements FOR INSERT TO authenticated 
 WITH CHECK (true);
-
--- REGLA DE SEGURIDAD CRÍTICA:
--- NO existen políticas de UPDATE ni DELETE para inventory_movements.
--- El historial de almacén es completamente inmutable.

@@ -1,6 +1,7 @@
 /**
  * SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
- * Módulo 2: Catálogo de Productos y Unidades Físicas
+ * Módulo 2: Catálogo de Productos y Unidades Físicas (Versión 1.1)
+ * Soporta vinculación directa de Grupos/Familias y Nombre de Producto
  */
 
 import { getSupabase } from '../config.js';
@@ -11,7 +12,6 @@ import {
     hideLoading, 
     openModal, 
     closeModal, 
-    showConfirm,
     getStockStatusBadge,
     getUnitStatusBadge,
     formatDateTime
@@ -20,6 +20,15 @@ import { parseExcelFile } from '../utils/excel.js';
 
 let productsList = [];
 let selectedProductId = null;
+
+// Grupos y Familias oficiales de INDUSTRAC
+export const INDUSTRAC_FAMILIES = [
+    'AF-100',
+    'OF-100',
+    'OSVK-704',
+    'MMK-700',
+    'MK-100'
+];
 
 /**
  * Renderiza la vista principal del catálogo de productos
@@ -33,10 +42,10 @@ export async function renderProductsView(container) {
                 <div>
                     <h2 class="card-title">
                         <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
-                        Catálogo Maestro de Referencias
+                        Catálogo Maestro de Productos y Referencias
                     </h2>
                     <p style="font-size: 0.85rem; color: var(--color-text-muted);">
-                        Gestión de productos y consulta de unidades físicas individuales vinculadas.
+                        Registro de productos vinculados a sus grupos de stickers (AF-100, OF-100, OSVK-704, etc.) y consulta de existencias.
                     </p>
                 </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
@@ -47,7 +56,7 @@ export async function renderProductsView(container) {
                         </button>
                         <button type="button" class="btn btn-primary" id="btnNewProduct">
                             <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            Nueva Referencia
+                            + Nuevo Producto
                         </button>
                     ` : `
                         <span class="badge" style="background:#F1F5F9; color:#64748B;">Modo Consulta (Operador)</span>
@@ -55,14 +64,18 @@ export async function renderProductsView(container) {
                 </div>
             </div>
 
-            <!-- Barra de Filtros y Búsqueda -->
+            <!-- Filtros de Búsqueda y Grupo -->
             <div class="filter-toolbar">
                 <div class="search-input-group">
                     <svg class="search-icon" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                    <input type="text" id="productSearchInput" class="form-control" placeholder="Buscar por descripción, N° Parte o Familia...">
+                    <input type="text" id="productSearchInput" class="form-control" placeholder="Buscar por Nombre, Part Number, Grupo o Descripción...">
                 </div>
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <select id="productCategoryFilter" class="form-control" style="width: auto; min-width: 160px;">
+                <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                    <select id="productFamilyFilter" class="form-control" style="width: auto; min-width: 150px;">
+                        <option value="">Todos los Grupos</option>
+                        ${INDUSTRAC_FAMILIES.map(f => `<option value="${f}">${f}</option>`).join('')}
+                    </select>
+                    <select id="productCategoryFilter" class="form-control" style="width: auto; min-width: 150px;">
                         <option value="">Todas las Categorías</option>
                     </select>
                     <button type="button" class="btn btn-secondary" id="btnRefreshProducts" title="Actualizar lista">
@@ -76,10 +89,10 @@ export async function renderProductsView(container) {
                 <table class="custom-table" id="productsTable">
                     <thead>
                         <tr>
-                            <th>Familia / Cód.</th>
+                            <th>Grupo / Familia</th>
                             <th>Part Number</th>
+                            <th>Nombre del Producto</th>
                             <th>Descripción</th>
-                            <th>Categoría</th>
                             <th>Stock Disp.</th>
                             <th>Stock Mín.</th>
                             <th>Estado</th>
@@ -88,37 +101,59 @@ export async function renderProductsView(container) {
                         </tr>
                     </thead>
                     <tbody id="productsTableBody">
-                        <tr><td colspan="9" style="text-align: center; padding: 2rem;">Cargando referencias...</td></tr>
+                        <tr><td colspan="9" style="text-align: center; padding: 2rem;">Cargando catálogo maestro...</td></tr>
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- MODAL: Crear / Editar Referencia -->
+        <!-- MODAL: Crear / Editar Producto -->
         <div id="productModal" class="modal-backdrop">
             <div class="modal-dialog modal-dialog-large">
                 <div class="modal-header">
-                    <h3 class="modal-title" id="productModalTitle">Nueva Referencia de Producto</h3>
+                    <h3 class="modal-title" id="productModalTitle">+ Nuevo Producto en Catálogo</h3>
                     <button type="button" class="modal-close-btn" id="closeProductModal">&times;</button>
                 </div>
                 <form id="productForm">
                     <input type="hidden" id="formProductId">
                     <div class="modal-body">
+                        <!-- Fila 1: Grupo y Part Number -->
                         <div class="form-row">
                             <div class="form-group">
-                                <label class="form-label">Código Interno / Familia <span class="required">*</span></label>
-                                <input type="text" id="formInternalCode" class="form-control" placeholder="ej. AF-100, OSVK-704" required>
+                                <label class="form-label">Grupo o Familia de Códigos <span class="required">*</span></label>
+                                <input type="text" id="formInternalCode" class="form-control" placeholder="ej. AF-100, OF-100, OSVK-704" list="familySuggestions" required style="font-weight: 700; text-transform: uppercase;">
+                                <datalist id="familySuggestions">
+                                    ${INDUSTRAC_FAMILIES.map(f => `<option value="${f}">`).join('')}
+                                </datalist>
+                                <span style="font-size: 0.72rem; color: var(--color-text-muted);">Identifica el grupo del sticker (ej. AF-100, OF-100, OSVK-704, MMK-700, MK-100).</span>
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Part Number Original <span class="required">*</span></label>
-                                <input type="text" id="formPartNumber" class="form-control" placeholder="ej. 1613610500" required>
+                                <label class="form-label">Número de Parte Original (Part Number) <span class="required">*</span></label>
+                                <input type="text" id="formPartNumber" class="form-control" placeholder="ej. 1613610500" required style="font-weight: 700; text-transform: uppercase;">
+                                <span style="font-size: 0.72rem; color: var(--color-text-muted);">Número de parte original del fabricante o fabricante alternativo.</span>
                             </div>
                         </div>
+
+                        <!-- Fila 2: Nombre Completo y Categoría -->
+                        <div class="form-row">
+                            <div class="form-group" style="grid-column: span 2;">
+                                <label class="form-label">Nombre Completo del Producto <span class="required">*</span></label>
+                                <input type="text" id="formName" class="form-control" placeholder="ej. Oil Filter (Filtro de Aceite)" required style="font-size: 1rem; font-weight: 600;">
+                            </div>
+                        </div>
+
+                        <!-- Fila 3: Descripción Técnica -->
                         <div class="form-group">
-                            <label class="form-label">Descripción del Repuesto <span class="required">*</span></label>
-                            <input type="text" id="formDescription" class="form-control" placeholder="ej. Filtro de Aceite para Compresor" required>
+                            <label class="form-label">Descripción del Producto <span class="required">*</span></label>
+                            <textarea id="formDescription" class="form-control" rows="2" placeholder="ej. Filtro de aceite para compresor de tornillo rotativo" required></textarea>
                         </div>
+
+                        <!-- Fila 4: Stock Mínimo, Categoría y Marca -->
                         <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Stock Mínimo de Alerta <span class="required">*</span></label>
+                                <input type="number" id="formMinStock" class="form-control" min="0" value="5" required style="font-weight: 700;">
+                            </div>
                             <div class="form-group">
                                 <label class="form-label">Categoría</label>
                                 <input type="text" id="formCategory" class="form-control" placeholder="ej. Filtros, Kits, Válvulas" list="categorySuggestions">
@@ -133,10 +168,16 @@ export async function renderProductsView(container) {
                             </div>
                             <div class="form-group">
                                 <label class="form-label">Marca / Fabricante</label>
-                                <input type="text" id="formBrand" class="form-control" placeholder="ej. Atlas Copco, Ingersoll Rand, Sullair">
+                                <input type="text" id="formBrand" class="form-control" placeholder="ej. Atlas Copco, Sullair, etc.">
                             </div>
                         </div>
+
+                        <!-- Fila 5: Ubicación y Observaciones -->
                         <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Ubicación en Almacén</label>
+                                <input type="text" id="formWarehouseLocation" class="form-control" placeholder="ej. Estante B-3, Nivel 2">
+                            </div>
                             <div class="form-group">
                                 <label class="form-label">Unidad de Medida</label>
                                 <select id="formUnitOfMeasure" class="form-control">
@@ -146,23 +187,16 @@ export async function renderProductsView(container) {
                                     <option value="GAL">Galón (GAL)</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label class="form-label">Stock Mínimo de Alerta <span class="required">*</span></label>
-                                <input type="number" id="formMinStock" class="form-control" min="0" value="5" required>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">Ubicación en Almacén</label>
-                                <input type="text" id="formWarehouseLocation" class="form-control" placeholder="ej. Estante B-3, Nivel 2">
-                            </div>
                         </div>
-                        <div class="form-group">
+
+                        <div class="form-group" style="margin-bottom: 0;">
                             <label class="form-label">Observaciones <span class="optional">(Opcional)</span></label>
-                            <textarea id="formNotes" class="form-control" rows="2" placeholder="Notas técnicas, compatibilidades, etc."></textarea>
+                            <input type="text" id="formNotes" class="form-control" placeholder="Notas técnicas, referencias cruzadas o compatibilidades">
                         </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" id="cancelProductBtn">Cancelar</button>
-                        <button type="submit" class="btn btn-primary" id="saveProductBtn">Guardar Referencia</button>
+                        <button type="submit" class="btn btn-primary" id="saveProductBtn">Guardar Producto en Supabase</button>
                     </div>
                 </form>
             </div>
@@ -183,7 +217,7 @@ export async function renderProductsView(container) {
                         <input type="text" id="searchUnitCodeInput" class="form-control" placeholder="Filtrar por sticker..." style="max-width: 250px;">
                         <button type="button" class="btn btn-accent" id="btnQuickAddUnit">
                             <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            Registrar Unidad Físicamente
+                            Registrar Stickers en Ingresos
                         </button>
                     </div>
                     <div class="table-responsive" style="max-height: 420px; overflow-y: auto;">
@@ -217,9 +251,9 @@ export async function renderProductsView(container) {
                 </div>
                 <div class="modal-body">
                     <div style="background-color: #EFF6FF; border: 1px solid #BFDBFE; border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #1E3A8A;">
-                        <strong>Formato de Columnas requerido en tu Excel/CSV:</strong>
+                        <strong>Columnas recomendadas en tu archivo:</strong>
                         <p style="margin-top: 0.35rem;">
-                            <code>Familia</code>, <code>Part Number</code>, <code>Descripcion</code>, <code>Categoria</code>, <code>Marca</code>, <code>Unidad</code>, <code>Stock Minimo</code>, <code>Ubicacion</code>.
+                            <code>Grupo</code>, <code>Part Number</code>, <code>Nombre</code>, <code>Descripcion</code>, <code>Stock Minimo</code>, <code>Categoria</code>, <code>Marca</code>, <code>Ubicacion</code>.
                         </p>
                     </div>
                     <div class="form-group">
@@ -227,15 +261,16 @@ export async function renderProductsView(container) {
                         <input type="file" id="excelFileInput" class="form-control" accept=".xlsx, .xls, .csv">
                     </div>
                     <div id="importPreviewContainer" style="display: none; margin-top: 1rem;">
-                        <h4 style="font-size: 0.95rem; margin-bottom: 0.5rem; font-weight: 700;">Vista Previa (<span id="importCount">0</span> registros detectados):</h4>
+                        <h4 style="font-size: 0.95rem; margin-bottom: 0.5rem; font-weight: 700;">Vista Previa (<span id="importCount">0</span> registros):</h4>
                         <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
                             <table class="custom-table" id="importPreviewTable">
                                 <thead>
                                     <tr>
-                                        <th>Familia</th>
+                                        <th>Grupo</th>
                                         <th>Part Number</th>
+                                        <th>Nombre</th>
                                         <th>Descripción</th>
-                                        <th>Stock Mín.</th>
+                                        <th>Mín.</th>
                                     </tr>
                                 </thead>
                                 <tbody id="importPreviewBody"></tbody>
@@ -251,7 +286,6 @@ export async function renderProductsView(container) {
         </div>
     `;
 
-    // Asignar Eventos
     setupEventListeners();
     await loadProducts();
 }
@@ -268,7 +302,6 @@ async function loadProducts() {
     }
 
     try {
-        // Consultamos la vista de resumen de stock
         const { data, error } = await supabase
             .from('v_product_stock_summary')
             .select('*')
@@ -290,10 +323,11 @@ async function loadProducts() {
 }
 
 /**
- * Filtra y renderiza las filas de la tabla de referencias
+ * Filtra y renderiza las filas de la tabla de productos
  */
 function filterAndRenderTable() {
     const searchVal = document.getElementById('productSearchInput')?.value.trim().toLowerCase() || '';
+    const familyVal = document.getElementById('productFamilyFilter')?.value || '';
     const categoryVal = document.getElementById('productCategoryFilter')?.value || '';
     const tbody = document.getElementById('productsTableBody');
     if (!tbody) return;
@@ -302,10 +336,12 @@ function filterAndRenderTable() {
         const matchSearch = !searchVal || 
             (p.internal_code && p.internal_code.toLowerCase().includes(searchVal)) ||
             (p.part_number && p.part_number.toLowerCase().includes(searchVal)) ||
+            (p.name && p.name.toLowerCase().includes(searchVal)) ||
             (p.description && p.description.toLowerCase().includes(searchVal));
 
+        const matchFamily = !familyVal || (p.internal_code === familyVal);
         const matchCategory = !categoryVal || (p.category === categoryVal);
-        return matchSearch && matchCategory;
+        return matchSearch && matchFamily && matchCategory;
     });
 
     if (filtered.length === 0) {
@@ -329,12 +365,18 @@ function filterAndRenderTable() {
             <td><span class="code-pill">${p.internal_code}</span></td>
             <td><strong>${p.part_number}</strong></td>
             <td>
-                <div style="font-weight: 600;">${p.description}</div>
+                <div style="font-weight: 700; color: var(--color-primary-dark); font-size: 0.95rem;">
+                    ${p.name || p.description}
+                </div>
                 ${p.brand ? `<span style="font-size: 0.75rem; color: var(--color-text-muted);">${p.brand}</span>` : ''}
             </td>
-            <td>${p.category || '-'}</td>
             <td>
-                <span style="font-size: 1.05rem; font-weight: 700; color: ${p.available_units > 0 ? 'var(--status-available)' : 'var(--status-critical)'}">
+                <div style="font-size: 0.85rem; color: var(--color-text-main); max-width: 260px;">
+                    ${p.description || '-'}
+                </div>
+            </td>
+            <td>
+                <span style="font-size: 1.05rem; font-weight: 800; color: ${p.available_units > 0 ? 'var(--status-available)' : 'var(--status-critical)'}">
                     ${p.available_units}
                 </span>
                 <span style="font-size: 0.75rem; color: var(--color-text-muted);">/ ${p.total_registered_units} tot</span>
@@ -349,7 +391,7 @@ function filterAndRenderTable() {
                         Unidades
                     </button>
                     ${adminMode ? `
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.editProduct('${p.product_id}')" title="Editar Referencia">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.editProduct('${p.product_id}')" title="Editar Producto">
                             <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                         </button>
                     ` : ''}
@@ -368,7 +410,7 @@ function populateCategoryFilter(products) {
     const currentVal = select.value;
     const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean))).sort();
 
-    select.innerHTML = `<option value="">Todas las Categorías (${products.length})</option>` +
+    select.innerHTML = `<option value="">Todas las Categorías (${categories.length})</option>` +
         categories.map(c => `<option value="${c}">${c}</option>`).join('');
 
     select.value = currentVal;
@@ -379,27 +421,26 @@ function populateCategoryFilter(products) {
  */
 function setupEventListeners() {
     document.getElementById('productSearchInput')?.addEventListener('input', filterAndRenderTable);
+    document.getElementById('productFamilyFilter')?.addEventListener('change', filterAndRenderTable);
     document.getElementById('productCategoryFilter')?.addEventListener('change', filterAndRenderTable);
     document.getElementById('btnRefreshProducts')?.addEventListener('click', loadProducts);
 
-    // Modal Producto
+    // Modal Nuevo Producto
     document.getElementById('btnNewProduct')?.addEventListener('click', () => {
         document.getElementById('productForm').reset();
         document.getElementById('formProductId').value = '';
-        document.getElementById('productModalTitle').textContent = 'Nueva Referencia de Producto';
+        document.getElementById('productModalTitle').textContent = '+ Nuevo Producto en Catálogo';
         openModal('productModal');
     });
 
     document.getElementById('closeProductModal')?.addEventListener('click', () => closeModal('productModal'));
     document.getElementById('cancelProductBtn')?.addEventListener('click', () => closeModal('productModal'));
-
     document.getElementById('productForm')?.addEventListener('submit', handleSaveProduct);
 
     // Modal Unidades
     document.getElementById('closeUnitsModal')?.addEventListener('click', () => closeModal('productUnitsModal'));
     document.getElementById('closeUnitsModalFooter')?.addEventListener('click', () => closeModal('productUnitsModal'));
     document.getElementById('btnQuickAddUnit')?.addEventListener('click', () => {
-        // Redirige al módulo de Ingresos preseleccionando este producto
         window.location.hash = `#/ingresos?productId=${selectedProductId}`;
         closeModal('productUnitsModal');
     });
@@ -417,13 +458,12 @@ function setupEventListeners() {
     document.getElementById('excelFileInput')?.addEventListener('change', handleExcelFileSelect);
     document.getElementById('confirmImportBtn')?.addEventListener('click', handleConfirmImport);
 
-    // Handlers globales expuestos
     window.viewProductUnits = viewProductUnits;
     window.editProduct = editProduct;
 }
 
 /**
- * Guardar o Actualizar Referencia
+ * Guardar o Actualizar Producto en Supabase
  */
 async function handleSaveProduct(e) {
     e.preventDefault();
@@ -433,20 +473,27 @@ async function handleSaveProduct(e) {
     const id = document.getElementById('formProductId').value;
     const internal_code = document.getElementById('formInternalCode').value.trim().toUpperCase();
     const part_number = document.getElementById('formPartNumber').value.trim().toUpperCase();
+    const name = document.getElementById('formName').value.trim();
     const description = document.getElementById('formDescription').value.trim();
-    const category = document.getElementById('formCategory').value.trim() || 'Repuestos';
-    const brand = document.getElementById('formBrand').value.trim();
-    const unit_of_measure = document.getElementById('formUnitOfMeasure').value;
     const min_stock = parseInt(document.getElementById('formMinStock').value, 10) || 0;
-    const warehouse_location = document.getElementById('formWarehouseLocation').value.trim();
-    const notes = document.getElementById('formNotes').value.trim();
+    const category = document.getElementById('formCategory').value.trim() || 'Repuestos';
+    const brand = document.getElementById('formBrand').value.trim() || null;
+    const unit_of_measure = document.getElementById('formUnitOfMeasure').value || 'UND';
+    const warehouse_location = document.getElementById('formWarehouseLocation').value.trim() || null;
+    const notes = document.getElementById('formNotes').value.trim() || null;
 
-    showLoading('Guardando referencia...');
+    if (!internal_code || !part_number || !name || !description) {
+        showToast('Complete el Grupo, Part Number, Nombre y Descripción.', 'warning');
+        return;
+    }
+
+    showLoading('Guardando producto en Supabase...');
 
     try {
         const payload = {
             internal_code,
             part_number,
+            name,
             description,
             category,
             brand,
@@ -463,19 +510,19 @@ async function handleSaveProduct(e) {
             res = await supabase.from('products').insert([payload]);
         }
 
+        hideLoading();
+
         if (res.error) {
-            hideLoading();
             if (res.error.message.includes('uq_product_part_number')) {
-                showToast('Ya existe un producto con este Número de Parte.', 'error');
+                showToast(`Ya existe un producto registrado con el Part Number: ${part_number}`, 'error', 5000);
             } else {
-                showToast(`Error al guardar: ${res.error.message}`, 'error');
+                showToast(`Error al guardar: ${res.error.message}`, 'error', 5000);
             }
             return;
         }
 
-        hideLoading();
         closeModal('productModal');
-        showToast(id ? 'Referencia actualizada correctamente.' : 'Nueva referencia creada.', 'success');
+        showToast(id ? `Producto ${name} actualizado.` : `¡Producto ${name} registrado en Supabase!`, 'success');
         await loadProducts();
     } catch (err) {
         hideLoading();
@@ -484,7 +531,7 @@ async function handleSaveProduct(e) {
 }
 
 /**
- * Cargar datos de referencia para editar
+ * Cargar datos de producto para editar
  */
 async function editProduct(productId) {
     const prod = productsList.find(p => p.product_id === productId);
@@ -493,28 +540,29 @@ async function editProduct(productId) {
     document.getElementById('formProductId').value = prod.product_id;
     document.getElementById('formInternalCode').value = prod.internal_code || '';
     document.getElementById('formPartNumber').value = prod.part_number || '';
+    document.getElementById('formName').value = prod.name || prod.description || '';
     document.getElementById('formDescription').value = prod.description || '';
+    document.getElementById('formMinStock').value = prod.min_stock || 0;
     document.getElementById('formCategory').value = prod.category || '';
     document.getElementById('formBrand').value = prod.brand || '';
     document.getElementById('formUnitOfMeasure').value = prod.unit_of_measure || 'UND';
-    document.getElementById('formMinStock').value = prod.min_stock || 0;
     document.getElementById('formWarehouseLocation').value = prod.warehouse_location || '';
     document.getElementById('formNotes').value = prod.notes || '';
 
-    document.getElementById('productModalTitle').textContent = `Editar Referencia: ${prod.internal_code}`;
+    document.getElementById('productModalTitle').textContent = `Editar Producto: ${prod.name || prod.internal_code}`;
     openModal('productModal');
 }
 
 /**
- * Muestra el listado de unidades físicas individuales asociadas a un producto
+ * Ver Unidades Físicas de un Producto
  */
 async function viewProductUnits(productId) {
     selectedProductId = productId;
     const prod = productsList.find(p => p.product_id === productId);
     if (!prod) return;
 
-    document.getElementById('productUnitsTitle').textContent = `${prod.description}`;
-    document.getElementById('productUnitsSubtitle').textContent = `Familia: ${prod.internal_code} | Part Number: ${prod.part_number}`;
+    document.getElementById('productUnitsTitle').textContent = `${prod.name || prod.description}`;
+    document.getElementById('productUnitsSubtitle').textContent = `Grupo: ${prod.internal_code} | Part Number: ${prod.part_number}`;
     
     openModal('productUnitsModal');
     const tbody = document.getElementById('unitsTableBody');
@@ -539,8 +587,8 @@ async function viewProductUnits(productId) {
             tbody.innerHTML = `
                 <tr>
                     <td colspan="4" style="text-align: center; padding: 2rem; color: var(--color-text-muted);">
-                        No hay unidades físicas registradas para esta referencia todavía.<br>
-                        Haga clic en <strong>"Registrar Unidad Físicamente"</strong> para ingresar sus stickers.
+                        No hay unidades físicas registradas para este producto.<br>
+                        Haga clic en <strong>"Registrar Stickers en Ingresos"</strong> para asignar unidades físicas.
                     </td>
                 </tr>
             `;
@@ -560,7 +608,6 @@ async function viewProductUnits(productId) {
 
         renderUnits(units);
 
-        // Búsqueda en vivo de sticker en la lista del modal
         const searchInput = document.getElementById('searchUnitCodeInput');
         if (searchInput) {
             searchInput.value = '';
@@ -575,12 +622,9 @@ async function viewProductUnits(productId) {
     }
 }
 
-// Variables temporales para la importación Excel
+// Lógica de importación Excel
 let parsedImportData = [];
 
-/**
- * Procesa la selección del archivo Excel/CSV
- */
 async function handleExcelFileSelect(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -592,7 +636,6 @@ async function handleExcelFileSelect(e) {
             return;
         }
 
-        // Normalizar columnas según encabezados flexibles
         parsedImportData = rawJson.map(row => {
             const getVal = (...keys) => {
                 for (const k of keys) {
@@ -605,57 +648,59 @@ async function handleExcelFileSelect(e) {
                 return '';
             };
 
+            const part_number = getVal('Part Number', 'Numero Parte', 'part_number', 'P/N', 'Parte');
+            const name = getVal('Nombre', 'Nombre del Producto', 'name', 'Producto') || getVal('Descripcion', 'Descripción', 'description');
+            const description = getVal('Descripcion', 'Descripción', 'description', 'Detalle') || name;
+            const internal_code = getVal('Grupo', 'Familia', 'Codigo', 'Código', 'internal_code') || 'AF-100';
+
             return {
-                internal_code: getVal('Familia', 'Codigo', 'Código', 'Codigo Interno', 'internal_code'),
-                part_number: getVal('Part Number', 'Numero Parte', 'Número de Parte', 'part_number', 'P/N'),
-                description: getVal('Descripcion', 'Descripción', 'description', 'Producto', 'Nombre'),
+                internal_code: internal_code.toUpperCase(),
+                part_number: part_number.toUpperCase(),
+                name,
+                description,
                 category: getVal('Categoria', 'Categoría', 'category') || 'Repuestos',
-                brand: getVal('Marca', 'brand', 'Fabricante'),
+                brand: getVal('Marca', 'brand', 'Fabricante') || null,
                 unit_of_measure: getVal('Unidad', 'unit_of_measure', 'UM') || 'UND',
                 min_stock: parseInt(getVal('Stock Minimo', 'Stock Mínimo', 'min_stock', 'Minimo'), 10) || 5,
-                warehouse_location: getVal('Ubicacion', 'Ubicación', 'warehouse_location', 'Estante')
+                warehouse_location: getVal('Ubicacion', 'Ubicación', 'warehouse_location', 'Estante') || null
             };
-        }).filter(item => item.part_number && item.description); // Filtra filas válidas
+        }).filter(item => item.part_number && item.name);
 
         if (parsedImportData.length === 0) {
-            showToast('No se encontraron filas con "Part Number" y "Descripción" válidos.', 'error');
+            showToast('No se encontraron filas con "Part Number" y "Nombre" válidos.', 'error');
             document.getElementById('confirmImportBtn').disabled = true;
             return;
         }
 
-        // Mostrar vista previa
         document.getElementById('importCount').textContent = parsedImportData.length;
         const previewBody = document.getElementById('importPreviewBody');
-        previewBody.innerHTML = parsedImportData.slice(0, 10).map(row => `
+        previewBody.innerHTML = parsedImportData.slice(0, 8).map(row => `
             <tr>
-                <td><span class="code-pill">${row.internal_code || '-'}</span></td>
+                <td><span class="code-pill">${row.internal_code}</span></td>
                 <td><strong>${row.part_number}</strong></td>
+                <td><strong>${row.name}</strong></td>
                 <td>${row.description}</td>
                 <td>${row.min_stock}</td>
             </tr>
-        `).join('') + (parsedImportData.length > 10 ? `<tr><td colspan="4" style="text-align: center; color: var(--color-text-muted);">... y ${parsedImportData.length - 10} filas más</td></tr>` : '');
+        `).join('') + (parsedImportData.length > 8 ? `<tr><td colspan="5" style="text-align: center; color: var(--color-text-muted);">... y ${parsedImportData.length - 8} filas más</td></tr>` : '');
 
         document.getElementById('importPreviewContainer').style.display = 'block';
         document.getElementById('confirmImportBtn').disabled = false;
-        showToast(`${parsedImportData.length} productos listos para importar.`, 'info');
+        showToast(`${parsedImportData.length} productos detectados en el archivo.`, 'info');
     } catch (err) {
         showToast(`Error al leer archivo: ${err.message}`, 'error');
     }
 }
 
-/**
- * Confirma la inserción masiva a Supabase
- */
 async function handleConfirmImport() {
     if (!parsedImportData || parsedImportData.length === 0) return;
 
     const supabase = getSupabase();
     if (!supabase) return;
 
-    showLoading(`Importando ${parsedImportData.length} referencias a Supabase...`);
+    showLoading(`Importando ${parsedImportData.length} productos a Supabase...`);
 
     try {
-        // Upsert por part_number
         const { error } = await supabase
             .from('products')
             .upsert(parsedImportData, { onConflict: 'part_number' });
@@ -668,7 +713,7 @@ async function handleConfirmImport() {
         }
 
         closeModal('importModal');
-        showToast(`¡Se importaron ${parsedImportData.length} referencias correctamente!`, 'success');
+        showToast(`¡Se importaron ${parsedImportData.length} productos correctamente!`, 'success');
         parsedImportData = [];
         await loadProducts();
     } catch (err) {

@@ -172,3 +172,4 @@ export async function recognizeStickerCode(imageSource) {
         return null;
     }
 }
+

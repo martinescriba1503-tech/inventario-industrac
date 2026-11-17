@@ -152,3 +152,4 @@ export function getCurrentProfile() {
 export function isAdmin() {
     return currentProfile && currentProfile.role === 'admin';
 }
+

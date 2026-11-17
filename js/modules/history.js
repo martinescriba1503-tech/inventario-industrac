@@ -121,6 +121,7 @@ async function loadHistory() {
                 products (
                     internal_code,
                     part_number,
+                    name,
                     description,
                     category
                 )
@@ -220,8 +221,8 @@ function filterAndRenderHistory() {
                 <td>${typeBadge}</td>
                 <td><strong class="code-pill">${m.unit_code}</strong></td>
                 <td>
-                    <div style="font-weight: 600;">${prod.description || '-'}</div>
-                    <span style="font-size: 0.75rem; color: var(--color-text-muted);">${prod.internal_code || ''}</span>
+                    <div style="font-weight: 600;">${prod.name || prod.description || '-'}</div>
+                    <span style="font-size: 0.75rem; color: var(--color-text-muted);">${prod.internal_code || ''} ${prod.name && prod.description ? `• ${prod.description}` : ''}</span>
                 </td>
                 <td><strong>${prod.part_number || '-'}</strong></td>
                 <td>${m.worker_name ? `<strong>${m.worker_name}</strong>` : '<span style="color: var(--color-text-muted);">-</span>'}</td>
@@ -282,3 +283,4 @@ function setupHistoryListeners() {
         showToast('Exportación de historial completada.', 'success');
     });
 }
+

@@ -1,6 +1,7 @@
 /**
  * SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
- * Módulo 3: Registro de Ingresos de Unidades Individuales
+ * Módulo 3: Registro de Ingresos de Unidades Individuales (Versión 1.1)
+ * Muestra ficha automática de producto y cálculo seguro de correlativos por grupo
  */
 
 import { getSupabase } from '../config.js';
@@ -13,12 +14,13 @@ import {
 
 let availableProducts = [];
 let pendingUnitCodes = new Set();
+let currentSelectedProduct = null;
+let currentCorrelativeInfo = null;
 
 /**
  * Renderiza la interfaz de Ingresos
  */
 export async function renderEntriesView(container, queryParams = '') {
-    // Si viene un productId en los parámetros del query
     const urlParams = new URLSearchParams(queryParams);
     const preselectedProductId = urlParams.get('productId');
 
@@ -31,7 +33,7 @@ export async function renderEntriesView(container, queryParams = '') {
                         Registro de Ingreso de Repuestos al Almacén
                     </h2>
                     <p style="font-size: 0.85rem; color: var(--color-text-muted);">
-                        Asigne los stickers físicos impresos al producto correspondiente. Cada código individual pasará al estado DISPONIBLE.
+                        Seleccione el producto del catálogo para cargar su ficha y asigne los stickers alfanuméricos físicos individuales.
                     </p>
                 </div>
             </div>
@@ -41,26 +43,61 @@ export async function renderEntriesView(container, queryParams = '') {
                 <div style="background-color: #F8FAFC; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.5rem;">
                     <h3 style="font-size: 1rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
                         <span style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem;">1</span>
-                        Seleccionar Referencia de Producto
+                        Seleccionar Producto del Catálogo Maestro
                     </h3>
-                    <div class="form-row">
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label class="form-label">Buscar Referencia (Part Number, Familia o Descripción) <span class="required">*</span></label>
-                            <select id="entryProductSelect" class="form-control" required>
-                                <option value="">-- Seleccione un producto del catálogo --</option>
-                            </select>
-                        </div>
+                    
+                    <div class="form-group" style="margin-bottom: 0.75rem;">
+                        <label class="form-label">Buscar Referencia (por Nombre, Part Number o Grupo) <span class="required">*</span></label>
+                        <select id="entryProductSelect" class="form-control" required style="font-size: 0.95rem; font-weight: 600;">
+                            <option value="">-- Seleccione un producto del catálogo --</option>
+                        </select>
                     </div>
-                    <div id="selectedProductDetails" style="display: none; margin-top: 0.75rem; padding: 0.85rem; background: white; border-radius: var(--radius-sm); border-left: 4px solid var(--color-accent); font-size: 0.88rem;">
-                        <!-- Información rápida del producto seleccionado -->
+
+                    <!-- Ficha Automática del Producto Seleccionado -->
+                    <div id="selectedProductCard" style="display: none; margin-top: 1rem; background: white; border: 1.5px solid var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; box-shadow: var(--shadow-sm);">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.75rem; border-bottom: 1px solid var(--color-border); padding-bottom: 0.75rem; margin-bottom: 0.75rem;">
+                            <div>
+                                <span style="font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase; font-weight: 700;">Nombre del Producto:</span>
+                                <div id="cardProductName" style="font-size: 1.2rem; font-weight: 800; color: var(--color-primary-dark);">-</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <span style="font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase; font-weight: 700;">Grupo / Familia:</span>
+                                <div><span class="code-pill" id="cardProductGroup" style="font-size: 1rem; font-weight: 800; color: var(--color-primary);">-</span></div>
+                            </div>
+                        </div>
+
+                        <div class="form-row" style="margin-bottom: 0.75rem;">
+                            <div>
+                                <span style="font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600;">Part Number Original:</span>
+                                <div id="cardProductPartNumber" style="font-size: 1rem; font-weight: 700; color: var(--color-text-main);">-</div>
+                            </div>
+                            <div>
+                                <span style="font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600;">Ubicación en Almacén:</span>
+                                <div id="cardProductLocation" style="font-size: 0.95rem; font-weight: 500;">-</div>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 0.75rem;">
+                            <span style="font-size: 0.78rem; color: var(--color-text-muted); font-weight: 600;">Descripción Técnica:</span>
+                            <div id="cardProductDescription" style="font-size: 0.9rem; color: var(--color-text-main);">-</div>
+                        </div>
+
+                        <!-- Panel Informativo de Correlativos -->
+                        <div id="correlativeStatusBanner" style="background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: var(--radius-sm); padding: 0.75rem 1rem; font-size: 0.85rem; color: #1E3A8A; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                            <div>
+                                <strong>Control de Correlativo en Supabase:</strong>
+                                <span id="correlativeText">Consultando correlativo...</span>
+                            </div>
+                            <span class="badge badge-disponible" id="badgeNextCode" style="font-size: 0.82rem;">Siguiente: -</span>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Paso 2: Datos del Documento / Procedencia (Opcional) -->
+                <!-- Paso 2: Datos de Documentación (Opcionales) -->
                 <div style="background-color: #F8FAFC; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.5rem;">
                     <h3 style="font-size: 1rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
                         <span style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem;">2</span>
-                        Datos del Ingreso <span class="optional">(Opcional)</span>
+                        Datos de Recepción <span class="optional">(Opcional)</span>
                     </h3>
                     <div class="form-row">
                         <div class="form-group">
@@ -73,73 +110,77 @@ export async function renderEntriesView(container, queryParams = '') {
                         </div>
                     </div>
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="form-label">Observaciones <span class="optional">(Opcional)</span></label>
-                        <input type="text" id="entryNotes" class="form-control" placeholder="ej. Lote recibido conforme en caja sellada">
+                        <label class="form-label">Observaciones de Recepción <span class="optional">(Opcional)</span></label>
+                        <input type="text" id="entryNotes" class="form-control" placeholder="ej. Cajas selladas recibidas en buen estado">
                     </div>
                 </div>
 
-                <!-- Paso 3: Códigos Individuales de los Stickers Físicos -->
+                <!-- Paso 3: Códigos de Stickers Físicos a Ingresar -->
                 <div style="background-color: #F8FAFC; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.5rem;">
-                    <h3 style="font-size: 1rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 0.85rem; display: flex; align-items: center; justify-content: space-between;">
-                        <span style="display: flex; align-items: center; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.5rem;">
+                        <h3 style="font-size: 1rem; font-weight: 700; color: var(--color-primary-dark); display: flex; align-items: center; gap: 0.5rem;">
                             <span style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem;">3</span>
-                            Códigos de Stickers Físicos a Ingresar
-                        </span>
+                            Códigos de Stickers Físicos a Pegar en Cada Unidad
+                        </h3>
                         <span id="pendingCountBadge" class="badge badge-disponible">0 Unidades a Registrar</span>
-                    </h3>
+                    </div>
 
-                    <!-- Entrada rápida de código -->
+                    <!-- Modo 1: Entrada manual unitaria -->
                     <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
-                        <input type="text" id="inputUnitCodeSingle" class="form-control" placeholder="Ingresar sticker ej. AF-100-00001" style="flex: 1; min-width: 220px; font-weight: 700; text-transform: uppercase;">
+                        <input type="text" id="inputUnitCodeSingle" class="form-control" placeholder="Ingresar código de sticker (ej. AF-100-00001)" style="flex: 1; min-width: 240px; font-weight: 700; text-transform: uppercase;">
                         <button type="button" class="btn btn-accent" id="btnAddSingleCode">
                             <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            Agregar Código
+                            Agregar Sticker
                         </button>
                         <button type="button" class="btn btn-secondary" id="btnToggleBatchHelper">
-                            Generador Correlativo / Pegado Múltiple
+                            Generador Asistido / Pegado en Lote
                         </button>
                     </div>
 
-                    <!-- Asistente de Lotes Correlativos (Oculto por defecto) -->
-                    <div id="batchHelperBox" style="display: none; background: white; border: 1.5px dashed var(--color-accent); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-                        <div style="font-size: 0.85rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 0.5rem;">
-                            Pegar Lista de Códigos o Generar Rango Correlativo de Stickers:
+                    <!-- Modo 2: Generador Asistido de Correlativos -->
+                    <div id="batchHelperBox" style="display: none; background: white; border: 1.5px dashed var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1rem;">
+                        <div style="font-size: 0.9rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 0.5rem;">
+                            Generador Automático de Correlativos Seguros:
                         </div>
+                        <p style="font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">
+                            El correlativo inicial se sincroniza automáticamente con el último número registrado en Supabase para evitar saltos o duplicados.
+                        </p>
                         <div class="form-row">
                             <div class="form-group">
-                                <label class="form-label">Prefijo (ej. AF-100-)</label>
-                                <input type="text" id="batchPrefix" class="form-control" placeholder="ej. AF-100-">
+                                <label class="form-label">Prefijo del Grupo</label>
+                                <input type="text" id="batchPrefix" class="form-control" placeholder="ej. AF-100-" style="font-weight: 700; text-transform: uppercase;">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Número Inicial (ej. 1 o 00001)</label>
-                                <input type="number" id="batchStartNum" class="form-control" placeholder="ej. 1">
+                                <label class="form-label">Número Inicial (5 dígitos)</label>
+                                <input type="number" id="batchStartNum" class="form-control" min="1" placeholder="ej. 1 o 51" style="font-weight: 700;">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Cantidad de Unidades</label>
-                                <input type="number" id="batchCount" class="form-control" placeholder="ej. 10">
+                                <label class="form-label">Cantidad de Unidades a Recibir</label>
+                                <input type="number" id="batchCount" class="form-control" min="1" max="500" placeholder="ej. 4" style="font-weight: 700;">
                             </div>
                             <div class="form-group" style="align-self: flex-end;">
-                                <button type="button" class="btn btn-primary" id="btnGenerateBatchRange" style="width: 100%;">Generar Rango</button>
+                                <button type="button" class="btn btn-primary" id="btnGenerateBatchRange" style="width: 100%;">Generar Stickers</button>
                             </div>
                         </div>
-                        <div class="form-group" style="margin-bottom: 0; margin-top: 0.5rem;">
-                            <label class="form-label">O pegar texto múltiple con códigos (uno por línea o separados por coma):</label>
+
+                        <div class="form-group" style="margin-bottom: 0; margin-top: 0.75rem; border-top: 1px dashed var(--color-border); padding-top: 0.75rem;">
+                            <label class="form-label">O pegar lista de stickers existentes (uno por línea):</label>
                             <textarea id="batchTextArea" class="form-control" rows="2" placeholder="AF-100-00001&#10;AF-100-00002&#10;AF-100-00003"></textarea>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btnProcessBatchText" style="margin-top: 0.5rem;">Procesar Texto Pegado</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnProcessBatchText" style="margin-top: 0.5rem;">Agregar Códigos Pegados</button>
                         </div>
                     </div>
 
-                    <!-- Lista de Stickers en Cola para Guardar -->
-                    <div id="unitsQueueContainer" style="background: white; border-radius: var(--radius-sm); border: 1px solid var(--color-border); padding: 0.75rem; min-height: 120px; max-height: 260px; overflow-y: auto;">
+                    <!-- Lista de Stickers en Espera de Guardado -->
+                    <div id="unitsQueueContainer" style="background: white; border-radius: var(--radius-sm); border: 1px solid var(--color-border); padding: 0.85rem; min-height: 120px; max-height: 260px; overflow-y: auto;">
                         <div id="emptyQueueMsg" style="text-align: center; color: var(--color-text-muted); padding: 2rem 0; font-size: 0.88rem;">
-                            No ha agregado ningún código todavía. Escriba o pegue los stickers de las unidades recibidas.
+                            No ha agregado stickers todavía. Ingrese los códigos de las unidades físicas que ingresarán con estado <strong>DISPONIBLE</strong>.
                         </div>
                         <div id="chipsContainer" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
                     </div>
                 </div>
 
-                <!-- Botón de Envío -->
-                <div style="display: flex; justify-content: flex-end; gap: 1rem;">
+                <!-- Botones de Acción -->
+                <div style="display: flex; justify-content: flex-end; gap: 1rem; align-items: center;">
                     <button type="button" class="btn btn-secondary" id="btnClearQueue">Limpiar Lista</button>
                     <button type="submit" class="btn btn-primary btn-large-action" id="btnSubmitEntry" style="max-width: 320px;" disabled>
                         <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
@@ -151,12 +192,15 @@ export async function renderEntriesView(container, queryParams = '') {
     `;
 
     pendingUnitCodes.clear();
+    currentSelectedProduct = null;
+    currentCorrelativeInfo = null;
+
     await loadProductsDropdown(preselectedProductId);
     setupEntryListeners();
 }
 
 /**
- * Carga el selector de productos
+ * Carga el selector de productos con datos de nombre y grupo
  */
 async function loadProductsDropdown(preselectedId = null) {
     const supabase = getSupabase();
@@ -166,11 +210,11 @@ async function loadProductsDropdown(preselectedId = null) {
     try {
         const { data, error } = await supabase
             .from('products')
-            .select('id, internal_code, part_number, description, unit_of_measure, warehouse_location')
+            .select('id, internal_code, part_number, name, description, unit_of_measure, warehouse_location')
             .order('internal_code', { ascending: true });
 
         if (error) {
-            showToast(`Error cargando referencias: ${error.message}`, 'error');
+            showToast(`Error cargando catálogo: ${error.message}`, 'error');
             return;
         }
 
@@ -178,12 +222,12 @@ async function loadProductsDropdown(preselectedId = null) {
         select.innerHTML = `<option value="">-- Seleccione un producto del catálogo (${availableProducts.length}) --</option>` +
             availableProducts.map(p => `
                 <option value="${p.id}" ${p.id === preselectedId ? 'selected' : ''}>
-                    [${p.internal_code}] ${p.part_number} – ${p.description}
+                    [${p.internal_code}] ${p.part_number} – ${p.name || p.description}
                 </option>
             `).join('');
 
         if (preselectedId) {
-            updateSelectedProductBox(preselectedId);
+            await handleProductSelection(preselectedId);
         }
     } catch (err) {
         console.error('Error:', err);
@@ -191,41 +235,70 @@ async function loadProductsDropdown(preselectedId = null) {
 }
 
 /**
- * Muestra el cuadro informativo de la referencia seleccionada
+ * Al seleccionar producto: muestra su ficha automática y calcula el próximo correlativo en Supabase
  */
-function updateSelectedProductBox(productId) {
-    const detailsBox = document.getElementById('selectedProductDetails');
-    const batchPrefixInput = document.getElementById('batchPrefix');
-    if (!detailsBox) return;
+async function handleProductSelection(productId) {
+    const card = document.getElementById('selectedProductCard');
+    const prefixInput = document.getElementById('batchPrefix');
+    const startNumInput = document.getElementById('batchStartNum');
+    const correlativeText = document.getElementById('correlativeText');
+    const badgeNext = document.getElementById('badgeNextCode');
+    const singleCodeInput = document.getElementById('inputUnitCodeSingle');
 
-    const prod = availableProducts.find(p => p.id === productId);
-    if (!prod) {
-        detailsBox.style.display = 'none';
+    currentSelectedProduct = availableProducts.find(p => p.id === productId);
+
+    if (!currentSelectedProduct) {
+        card.style.display = 'none';
         return;
     }
 
-    detailsBox.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-            <div>
-                <strong>Familia / Código:</strong> <span class="code-pill">${prod.internal_code}</span> &nbsp;|&nbsp; 
-                <strong>P/N:</strong> <span>${prod.part_number}</span> &nbsp;|&nbsp; 
-                <strong>Ubicación:</strong> <span>${prod.warehouse_location || 'No asignada'}</span>
-            </div>
-            <div style="color: var(--color-primary); font-weight: 600;">
-                ${prod.description}
-            </div>
-        </div>
-    `;
-    detailsBox.style.display = 'block';
+    // Llenar ficha del producto automáticamente
+    document.getElementById('cardProductName').textContent = currentSelectedProduct.name || currentSelectedProduct.description;
+    document.getElementById('cardProductGroup').textContent = currentSelectedProduct.internal_code;
+    document.getElementById('cardProductPartNumber').textContent = currentSelectedProduct.part_number;
+    document.getElementById('cardProductLocation').textContent = currentSelectedProduct.warehouse_location || 'No asignada';
+    document.getElementById('cardProductDescription').textContent = currentSelectedProduct.description;
 
-    // Auto-rellenar prefijo sugerido para el generador
-    if (batchPrefixInput && !batchPrefixInput.value) {
-        batchPrefixInput.value = `${prod.internal_code}-`;
+    card.style.display = 'block';
+
+    // Consultar el próximo correlativo seguro para este grupo en Supabase
+    const supabase = getSupabase();
+    if (supabase) {
+        correlativeText.textContent = 'Calculando correlativo más alto registrado...';
+        try {
+            const { data, error } = await supabase.rpc('get_next_correlative', {
+                p_family_code: currentSelectedProduct.internal_code
+            });
+
+            if (!error && data) {
+                currentCorrelativeInfo = data;
+                if (data.has_existing_units) {
+                    correlativeText.textContent = `Último código registrado: ${data.last_code}.`;
+                } else {
+                    correlativeText.textContent = `No hay unidades previas. Inicia en 00001.`;
+                }
+
+                badgeNext.textContent = `Siguiente sugerido: ${data.next_code}`;
+
+                // Autocompletar sugerencias en el generador
+                if (prefixInput) prefixInput.value = data.family_prefix;
+                if (startNumInput) startNumInput.value = data.next_correlative_number;
+                if (singleCodeInput && !singleCodeInput.value) {
+                    singleCodeInput.placeholder = `ej. ${data.next_code}`;
+                }
+            } else {
+                correlativeText.textContent = `Prefijo de grupo: ${currentSelectedProduct.internal_code}-`;
+                badgeNext.textContent = `Grupo: ${currentSelectedProduct.internal_code}`;
+                if (prefixInput) prefixInput.value = `${currentSelectedProduct.internal_code}-`;
+            }
+        } catch (e) {
+            console.error('Error calculando correlativo:', e);
+        }
     }
 }
 
 /**
- * Escuchadores de eventos para Ingresos
+ * Asigna los eventos de la vista de Ingresos
  */
 function setupEntryListeners() {
     const productSelect = document.getElementById('entryProductSelect');
@@ -239,10 +312,9 @@ function setupEntryListeners() {
     const form = document.getElementById('entryForm');
 
     productSelect?.addEventListener('change', () => {
-        updateSelectedProductBox(productSelect.value);
+        handleProductSelection(productSelect.value);
     });
 
-    // Agregar código individual
     const addCodeFromInput = () => {
         const code = singleCodeInput.value.trim().toUpperCase();
         if (!code) return;
@@ -266,19 +338,27 @@ function setupEntryListeners() {
         }
     });
 
-    // Mostrar / Ocultar asistente de lote
     toggleBatchBtn?.addEventListener('click', () => {
         batchBox.style.display = batchBox.style.display === 'none' ? 'block' : 'none';
     });
 
-    // Generar rango correlativo respetando el formato de 5 dígitos (ej. 00001)
+    // Generar rango correlativo seguro respetando el formato de 5 dígitos (00001, 00002...)
     genBatchBtn?.addEventListener('click', () => {
-        const prefix = document.getElementById('batchPrefix').value.trim().toUpperCase();
+        let prefix = document.getElementById('batchPrefix').value.trim().toUpperCase();
         const start = parseInt(document.getElementById('batchStartNum').value, 10);
         const count = parseInt(document.getElementById('batchCount').value, 10);
 
-        if (!prefix || isNaN(start) || isNaN(count) || count <= 0) {
-            showToast('Complete el prefijo, número inicial y una cantidad válida.', 'warning');
+        if (!prefix) {
+            showToast('Especifique el prefijo del grupo (ej. AF-100-)', 'warning');
+            return;
+        }
+
+        if (!prefix.endsWith('-')) {
+            prefix += '-';
+        }
+
+        if (isNaN(start) || isNaN(count) || count <= 0) {
+            showToast('Indique un número inicial y una cantidad de unidades válida.', 'warning');
             return;
         }
 
@@ -292,11 +372,11 @@ function setupEntryListeners() {
             }
         }
 
-        showToast(`Se agregaron ${addedCount} códigos correlativos a la lista.`, 'info');
+        showToast(`Se agregaron ${addedCount} stickers correlativos a la cola.`, 'info');
         renderChips();
     });
 
-    // Procesar texto pegado
+    // Procesar texto con stickers pegados
     processBatchTextBtn?.addEventListener('click', () => {
         const text = document.getElementById('batchTextArea').value;
         if (!text.trim()) return;
@@ -318,19 +398,14 @@ function setupEntryListeners() {
         renderChips();
     });
 
-    // Limpiar cola
     clearQueueBtn?.addEventListener('click', () => {
         pendingUnitCodes.clear();
         renderChips();
     });
 
-    // Enviar Formulario
     form?.addEventListener('submit', handleEntrySubmit);
 }
 
-/**
- * Renderiza los stickers en la lista visual
- */
 function renderChips() {
     const container = document.getElementById('chipsContainer');
     const emptyMsg = document.getElementById('emptyQueueMsg');
@@ -361,14 +436,14 @@ function renderChips() {
             background: #EFF6FF;
             color: #1E3A8A;
             border: 1px solid #BFDBFE;
-            padding: 0.3rem 0.65rem;
+            padding: 0.35rem 0.65rem;
             border-radius: var(--radius-sm);
             font-size: 0.85rem;
             font-weight: 700;
         `;
         chip.innerHTML = `
             <span>${code}</span>
-            <button type="button" style="background: none; border: none; color: #DC2626; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 0.15rem;" title="Quitar">&times;</button>
+            <button type="button" style="background: none; border: none; color: #DC2626; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 0.2rem;" title="Quitar">&times;</button>
         `;
         chip.querySelector('button').onclick = () => {
             pendingUnitCodes.delete(code);
@@ -379,7 +454,7 @@ function renderChips() {
 }
 
 /**
- * Envía el ingreso a Supabase ejecutando la función atómica RPC por cada unidad
+ * Envía el ingreso a Supabase mediante la función atómica RPC
  */
 async function handleEntrySubmit(e) {
     e.preventDefault();
@@ -389,9 +464,8 @@ async function handleEntrySubmit(e) {
         return;
     }
 
-    const productId = document.getElementById('entryProductSelect').value;
-    if (!productId) {
-        showToast('Debe seleccionar una referencia de producto.', 'warning');
+    if (!currentSelectedProduct) {
+        showToast('Debe seleccionar un producto del catálogo.', 'warning');
         return;
     }
 
@@ -406,7 +480,11 @@ async function handleEntrySubmit(e) {
 
     const confirmed = await showConfirm(
         'Confirmar Ingreso al Almacén',
-        `¿Desea registrar el ingreso de <strong>${pendingUnitCodes.size} unidades físicas</strong> para el producto seleccionado?<br><br>Todos los códigos quedarán con estado <strong>DISPONIBLE</strong>.`,
+        `¿Desea registrar el ingreso de <strong>${pendingUnitCodes.size} unidades físicas</strong> para:<br><br>
+        <strong>Producto:</strong> ${currentSelectedProduct.name || currentSelectedProduct.description}<br>
+        <strong>Part Number:</strong> ${currentSelectedProduct.part_number}<br>
+        <strong>Grupo:</strong> ${currentSelectedProduct.internal_code}<br><br>
+        Cada unidad pasará inmediatamente a estado <strong>DISPONIBLE</strong>.`,
         'Sí, Registrar Ingreso',
         'Cancelar'
     );
@@ -420,11 +498,10 @@ async function handleEntrySubmit(e) {
     const duplicateErrors = [];
     const otherErrors = [];
 
-    // Procesar cada unidad mediante la función atómica RPC
     for (const code of codesArray) {
         try {
             const { data, error } = await supabase.rpc('register_unit_entry', {
-                p_product_id: productId,
+                p_product_id: currentSelectedProduct.id,
                 p_unit_code: code,
                 p_supplier: supplier,
                 p_document_reference: docRef,
@@ -441,7 +518,7 @@ async function handleEntrySubmit(e) {
                 }
             } else {
                 successCount++;
-                pendingUnitCodes.delete(code); // Remover los exitosos
+                pendingUnitCodes.delete(code);
             }
         } catch (callErr) {
             otherErrors.push(`${code}: ${callErr.message}`);
@@ -451,20 +528,20 @@ async function handleEntrySubmit(e) {
     hideLoading();
     renderChips();
 
-    // Mensajes de resultado
     if (successCount > 0) {
         showToast(`¡${successCount} unidades registradas con éxito con estado DISPONIBLE!`, 'success');
+        // Actualizar datos de correlativo
+        await handleProductSelection(currentSelectedProduct.id);
     }
 
     if (duplicateErrors.length > 0) {
-        showToast(`ADVERTENCIA: Los siguientes ${duplicateErrors.length} códigos YA EXISTEN en el sistema y no fueron duplicados: ${duplicateErrors.join(', ')}`, 'error', 6000);
+        showToast(`ADVERTENCIA: Los siguientes ${duplicateErrors.length} códigos YA EXISTEN en el sistema y fueron bloqueados: ${duplicateErrors.join(', ')}`, 'error', 7000);
     }
 
     if (otherErrors.length > 0) {
         showToast(`Hubo ${otherErrors.length} errores: ${otherErrors[0]}`, 'warning', 5000);
     }
 
-    // Si todos fueron procesados con éxito
     if (pendingUnitCodes.size === 0) {
         document.getElementById('entrySupplier').value = '';
         document.getElementById('entryDocRef').value = '';

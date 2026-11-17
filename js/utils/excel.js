@@ -58,3 +58,4 @@ export function exportToExcel(data, fileName = 'Reporte_INDUSTRAC', sheetName = 
     const fullFileName = `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
     window.XLSX.writeFile(workbook, fullFileName);
 }
+

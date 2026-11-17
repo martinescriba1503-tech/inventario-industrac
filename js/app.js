@@ -210,3 +210,4 @@ function setAuthMode(register) {
         toggleLink.textContent = '¿Nuevo usuario? Regístrate aquí';
     }
 }
+

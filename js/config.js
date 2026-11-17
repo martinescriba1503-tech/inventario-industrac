@@ -65,3 +65,4 @@ export function clearSupabaseCredentials() {
     SUPABASE_CONFIG.anonKey = '';
     supabaseClient = null;
 }
+

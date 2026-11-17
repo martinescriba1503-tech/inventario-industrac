@@ -217,3 +217,4 @@ export function formatDateTime(isoString) {
         hour12: true
     });
 }
+

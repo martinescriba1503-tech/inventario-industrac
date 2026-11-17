@@ -265,8 +265,8 @@ function filterAndRenderReplenishment() {
             <td><span class="code-pill">${p.internal_code}</span></td>
             <td><strong>${p.part_number}</strong></td>
             <td>
-                <div style="font-weight: 600;">${p.description}</div>
-                ${p.brand ? `<span style="font-size: 0.75rem; color: var(--color-text-muted);">${p.brand}</span>` : ''}
+                <div style="font-weight: 700; color: var(--color-primary-dark);">${p.name || p.description}</div>
+                <span style="font-size: 0.78rem; color: var(--color-text-muted);">${p.description !== p.name ? p.description : ''} ${p.brand ? `• ${p.brand}` : ''}</span>
             </td>
             <td>
                 <span style="font-size: 1.1rem; font-weight: 800; color: ${p.available_units > 0 ? 'var(--status-available)' : 'var(--status-critical)'}">
@@ -386,3 +386,4 @@ async function handleSaveMinStock(e) {
         showToast(`Error: ${err.message}`, 'error');
     }
 }
+

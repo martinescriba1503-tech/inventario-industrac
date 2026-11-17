@@ -175,7 +175,7 @@ async function lookupUnitForReturn(unitCode) {
         document.getElementById('lblReturnCode').textContent = data.unit_code;
         document.getElementById('lblReturnStatus').innerHTML = getUnitStatusBadge(data.status);
         document.getElementById('lblReturnPartNumber').textContent = data.part_number;
-        document.getElementById('lblReturnDescription').textContent = data.description;
+        document.getElementById('lblReturnDescription').textContent = `${data.name || ''} ${data.description ? `– ${data.description}` : ''}`.trim();
         document.getElementById('lblReturnInternalCode').textContent = data.internal_code;
         document.getElementById('lblReturnLocation').textContent = data.warehouse_location || 'No asignada';
 
@@ -250,3 +250,4 @@ async function handleReturnSubmit(e) {
         showToast(`Error: ${err.message}`, 'error');
     }
 }
+

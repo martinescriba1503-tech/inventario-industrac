@@ -395,7 +395,7 @@ function displayExitModalWithWarning(unitCode, unitData, warningMsg) {
 
     document.getElementById('modalExitUnitCode').value = unitCode;
     document.getElementById('modalUnitStatusBadge').innerHTML = unitData ? getUnitStatusBadge(unitData.status) : '<span class="badge badge-critico">NO EXISTE</span>';
-    document.getElementById('modalProductDescription').textContent = unitData?.description || 'Producto No Encontrado';
+    document.getElementById('modalProductDescription').textContent = unitData ? `${unitData.name || ''} ${unitData.description ? `– ${unitData.description}` : ''}`.trim() : 'Producto No Encontrado';
     document.getElementById('modalPartNumber').textContent = unitData?.part_number || '-';
     document.getElementById('modalInternalCode').textContent = unitData?.internal_code || '-';
     document.getElementById('modalWarehouseLocation').textContent = unitData?.warehouse_location || '-';
@@ -425,7 +425,7 @@ function displayExitModalForSuccess(unitData) {
 
     document.getElementById('modalExitUnitCode').value = unitData.unit_code;
     document.getElementById('modalUnitStatusBadge').innerHTML = getUnitStatusBadge(unitData.status);
-    document.getElementById('modalProductDescription').textContent = unitData.description;
+    document.getElementById('modalProductDescription').textContent = `${unitData.name || ''} ${unitData.description ? `– ${unitData.description}` : ''}`.trim();
     document.getElementById('modalPartNumber').textContent = unitData.part_number;
     document.getElementById('modalInternalCode').textContent = unitData.internal_code;
     document.getElementById('modalWarehouseLocation').textContent = unitData.warehouse_location || 'No asignada';
@@ -497,3 +497,4 @@ async function handleConfirmExitSubmit(e) {
         showToast(`Error inesperado: ${err.message}`, 'error');
     }
 }
+
