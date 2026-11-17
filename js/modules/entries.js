@@ -1,7 +1,7 @@
 /**
  * SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
- * Módulo 3: Registro de Ingresos de Unidades Individuales (Versión 1.1)
- * Muestra ficha automática de producto y cálculo seguro de correlativos por grupo
+ * Módulo 3: Registro de Ingresos de Unidades Individuales (Versión 1.2)
+ * Carga automática de ficha, cálculo de correlativos y guardado directo
  */
 
 import { getSupabase } from '../config.js';
@@ -11,6 +11,7 @@ import {
     hideLoading, 
     showConfirm 
 } from '../utils/ui.js';
+import { getLocalProducts, getLocalUnits, saveLocalUnits } from './products.js';
 
 let availableProducts = [];
 let pendingUnitCodes = new Set();
@@ -85,7 +86,7 @@ export async function renderEntriesView(container, queryParams = '') {
                         <!-- Panel Informativo de Correlativos -->
                         <div id="correlativeStatusBanner" style="background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: var(--radius-sm); padding: 0.75rem 1rem; font-size: 0.85rem; color: #1E3A8A; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
                             <div>
-                                <strong>Control de Correlativo en Supabase:</strong>
+                                <strong>Control de Correlativo:</strong>
                                 <span id="correlativeText">Consultando correlativo...</span>
                             </div>
                             <span class="badge badge-disponible" id="badgeNextCode" style="font-size: 0.82rem;">Siguiente: -</span>
@@ -143,7 +144,7 @@ export async function renderEntriesView(container, queryParams = '') {
                             Generador Automático de Correlativos Seguros:
                         </div>
                         <p style="font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">
-                            El correlativo inicial se sincroniza automáticamente con el último número registrado en Supabase para evitar saltos o duplicados.
+                            El correlativo inicial se sincroniza automáticamente con el último número registrado para evitar saltos o duplicados.
                         </p>
                         <div class="form-row">
                             <div class="form-group">
@@ -203,39 +204,53 @@ export async function renderEntriesView(container, queryParams = '') {
  * Carga el selector de productos con datos de nombre y grupo
  */
 async function loadProductsDropdown(preselectedId = null) {
-    const supabase = getSupabase();
     const select = document.getElementById('entryProductSelect');
-    if (!supabase || !select) return;
+    if (!select) return;
 
-    try {
-        const { data, error } = await supabase
-            .from('products')
-            .select('id, internal_code, part_number, name, description, unit_of_measure, warehouse_location')
-            .order('internal_code', { ascending: true });
+    const supabase = getSupabase();
+    availableProducts = [];
 
-        if (error) {
-            showToast(`Error cargando catálogo: ${error.message}`, 'error');
-            return;
+    if (supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('products')
+                .select('id, internal_code, part_number, name, description, unit_of_measure, warehouse_location')
+                .order('internal_code', { ascending: true });
+
+            if (!error && data) {
+                availableProducts = data;
+            }
+        } catch (err) {
+            console.warn('Error leyendo catálogo de Supabase:', err);
         }
+    }
 
-        availableProducts = data || [];
-        select.innerHTML = `<option value="">-- Seleccione un producto del catálogo (${availableProducts.length}) --</option>` +
-            availableProducts.map(p => `
-                <option value="${p.id}" ${p.id === preselectedId ? 'selected' : ''}>
-                    [${p.internal_code}] ${p.part_number} – ${p.name || p.description}
-                </option>
-            `).join('');
+    if (availableProducts.length === 0) {
+        availableProducts = getLocalProducts().map(p => ({
+            id: p.id || p.product_id,
+            internal_code: p.internal_code,
+            part_number: p.part_number,
+            name: p.name,
+            description: p.description,
+            unit_of_measure: p.unit_of_measure,
+            warehouse_location: p.warehouse_location
+        }));
+    }
 
-        if (preselectedId) {
-            await handleProductSelection(preselectedId);
-        }
-    } catch (err) {
-        console.error('Error:', err);
+    select.innerHTML = `<option value="">-- Seleccione un producto del catálogo (${availableProducts.length}) --</option>` +
+        availableProducts.map(p => `
+            <option value="${p.id}" ${p.id === preselectedId ? 'selected' : ''}>
+                [${p.internal_code}] ${p.part_number} – ${p.name || p.description}
+            </option>
+        `).join('');
+
+    if (preselectedId) {
+        await handleProductSelection(preselectedId);
     }
 }
 
 /**
- * Al seleccionar producto: muestra su ficha automática y calcula el próximo correlativo en Supabase
+ * Al seleccionar producto: muestra su ficha automática y calcula el próximo correlativo
  */
 async function handleProductSelection(productId) {
     const card = document.getElementById('selectedProductCard');
@@ -261,8 +276,12 @@ async function handleProductSelection(productId) {
 
     card.style.display = 'block';
 
-    // Consultar el próximo correlativo seguro para este grupo en Supabase
+    const groupPrefix = `${currentSelectedProduct.internal_code}-`;
+
+    // Consultar el próximo correlativo seguro
     const supabase = getSupabase();
+    let correlativeFound = false;
+
     if (supabase) {
         correlativeText.textContent = 'Calculando correlativo más alto registrado...';
         try {
@@ -272,34 +291,58 @@ async function handleProductSelection(productId) {
 
             if (!error && data) {
                 currentCorrelativeInfo = data;
+                correlativeFound = true;
                 if (data.has_existing_units) {
                     correlativeText.textContent = `Último código registrado: ${data.last_code}.`;
                 } else {
                     correlativeText.textContent = `No hay unidades previas. Inicia en 00001.`;
                 }
 
-                badgeNext.textContent = `Siguiente sugerido: ${data.next_code}`;
-
-                // Autocompletar sugerencias en el generador
+                badgeNext.textContent = `Siguiente: ${data.next_code}`;
                 if (prefixInput) prefixInput.value = data.family_prefix;
                 if (startNumInput) startNumInput.value = data.next_correlative_number;
                 if (singleCodeInput && !singleCodeInput.value) {
                     singleCodeInput.placeholder = `ej. ${data.next_code}`;
                 }
-            } else {
-                correlativeText.textContent = `Prefijo de grupo: ${currentSelectedProduct.internal_code}-`;
-                badgeNext.textContent = `Grupo: ${currentSelectedProduct.internal_code}`;
-                if (prefixInput) prefixInput.value = `${currentSelectedProduct.internal_code}-`;
             }
         } catch (e) {
-            console.error('Error calculando correlativo:', e);
+            console.warn('Error calculando correlativo RPC:', e);
+        }
+    }
+
+    if (!correlativeFound) {
+        // Cálculo local de correlativo
+        const localUnits = getLocalUnits().filter(u => u.unit_code.startsWith(groupPrefix));
+        let maxNum = 0;
+        let lastCode = null;
+
+        localUnits.forEach(u => {
+            const suffix = u.unit_code.replace(groupPrefix, '');
+            const n = parseInt(suffix, 10);
+            if (!isNaN(n) && n > maxNum) {
+                maxNum = n;
+                lastCode = u.unit_code;
+            }
+        });
+
+        const nextNum = maxNum + 1;
+        const nextCode = `${groupPrefix}${nextNum.toString().padStart(5, '0')}`;
+
+        if (maxNum > 0) {
+            correlativeText.textContent = `Último código registrado: ${lastCode}.`;
+        } else {
+            correlativeText.textContent = `No hay unidades previas. Inicia en 00001.`;
+        }
+
+        badgeNext.textContent = `Siguiente: ${nextCode}`;
+        if (prefixInput) prefixInput.value = groupPrefix;
+        if (startNumInput) startNumInput.value = nextNum;
+        if (singleCodeInput && !singleCodeInput.value) {
+            singleCodeInput.placeholder = `ej. ${nextCode}`;
         }
     }
 }
 
-/**
- * Asigna los eventos de la vista de Ingresos
- */
 function setupEntryListeners() {
     const productSelect = document.getElementById('entryProductSelect');
     const singleCodeInput = document.getElementById('inputUnitCodeSingle');
@@ -342,7 +385,6 @@ function setupEntryListeners() {
         batchBox.style.display = batchBox.style.display === 'none' ? 'block' : 'none';
     });
 
-    // Generar rango correlativo seguro respetando el formato de 5 dígitos (00001, 00002...)
     genBatchBtn?.addEventListener('click', () => {
         let prefix = document.getElementById('batchPrefix').value.trim().toUpperCase();
         const start = parseInt(document.getElementById('batchStartNum').value, 10);
@@ -376,7 +418,6 @@ function setupEntryListeners() {
         renderChips();
     });
 
-    // Procesar texto con stickers pegados
     processBatchTextBtn?.addEventListener('click', () => {
         const text = document.getElementById('batchTextArea').value;
         if (!text.trim()) return;
@@ -454,15 +495,10 @@ function renderChips() {
 }
 
 /**
- * Envía el ingreso a Supabase mediante la función atómica RPC
+ * Envía el ingreso (Supabase + Respaldo Local)
  */
 async function handleEntrySubmit(e) {
     e.preventDefault();
-    const supabase = getSupabase();
-    if (!supabase) {
-        showToast('Supabase no está conectado.', 'error');
-        return;
-    }
 
     if (!currentSelectedProduct) {
         showToast('Debe seleccionar un producto del catálogo.', 'warning');
@@ -491,38 +527,61 @@ async function handleEntrySubmit(e) {
 
     if (!confirmed) return;
 
-    showLoading(`Registrando ${pendingUnitCodes.size} unidades en Supabase...`);
+    showLoading(`Registrando ${pendingUnitCodes.size} unidades...`);
 
     const codesArray = Array.from(pendingUnitCodes);
     let successCount = 0;
     const duplicateErrors = [];
     const otherErrors = [];
 
-    for (const code of codesArray) {
-        try {
-            const { data, error } = await supabase.rpc('register_unit_entry', {
-                p_product_id: currentSelectedProduct.id,
-                p_unit_code: code,
-                p_supplier: supplier,
-                p_document_reference: docRef,
-                p_notes: notes
-            });
+    const supabase = getSupabase();
 
-            if (error) {
-                otherErrors.push(`${code}: ${error.message}`);
-            } else if (data && !data.success) {
-                if (data.error.includes('YA EXISTE')) {
-                    duplicateErrors.push(code);
+    if (supabase) {
+        for (const code of codesArray) {
+            try {
+                const { data, error } = await supabase.rpc('register_unit_entry', {
+                    p_product_id: currentSelectedProduct.id,
+                    p_unit_code: code,
+                    p_supplier: supplier,
+                    p_document_reference: docRef,
+                    p_notes: notes
+                });
+
+                if (error) {
+                    otherErrors.push(`${code}: ${error.message}`);
+                } else if (data && !data.success) {
+                    if (data.error.includes('YA EXISTE')) {
+                        duplicateErrors.push(code);
+                    } else {
+                        otherErrors.push(`${code}: ${data.error}`);
+                    }
                 } else {
-                    otherErrors.push(`${code}: ${data.error}`);
+                    successCount++;
+                    pendingUnitCodes.delete(code);
                 }
+            } catch (callErr) {
+                otherErrors.push(`${code}: ${callErr.message}`);
+            }
+        }
+    } else {
+        // Modo local
+        const localUnits = getLocalUnits();
+        codesArray.forEach(code => {
+            if (localUnits.some(u => u.unit_code === code)) {
+                duplicateErrors.push(code);
             } else {
+                localUnits.push({
+                    id: 'unit_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                    product_id: currentSelectedProduct.id,
+                    unit_code: code,
+                    status: 'DISPONIBLE',
+                    created_at: new Date().toISOString()
+                });
                 successCount++;
                 pendingUnitCodes.delete(code);
             }
-        } catch (callErr) {
-            otherErrors.push(`${code}: ${callErr.message}`);
-        }
+        });
+        saveLocalUnits(localUnits);
     }
 
     hideLoading();
@@ -530,12 +589,11 @@ async function handleEntrySubmit(e) {
 
     if (successCount > 0) {
         showToast(`¡${successCount} unidades registradas con éxito con estado DISPONIBLE!`, 'success');
-        // Actualizar datos de correlativo
         await handleProductSelection(currentSelectedProduct.id);
     }
 
     if (duplicateErrors.length > 0) {
-        showToast(`ADVERTENCIA: Los siguientes ${duplicateErrors.length} códigos YA EXISTEN en el sistema y fueron bloqueados: ${duplicateErrors.join(', ')}`, 'error', 7000);
+        showToast(`ADVERTENCIA: Los siguientes ${duplicateErrors.length} códigos YA EXISTEN y no fueron duplicados: ${duplicateErrors.join(', ')}`, 'error', 7000);
     }
 
     if (otherErrors.length > 0) {

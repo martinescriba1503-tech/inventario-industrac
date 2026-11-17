@@ -1,11 +1,11 @@
 /**
  * SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
- * Módulo 2: Catálogo de Productos y Unidades Físicas (Versión 1.1)
- * Soporta vinculación directa de Grupos/Familias y Nombre de Producto
+ * Módulo 2: Catálogo de Productos y Unidades Físicas (Versión 1.2)
+ * Permite registro 100% autónomo desde la interfaz (con sincronización Supabase + soporte local de prueba)
  */
 
 import { getSupabase } from '../config.js';
-import { isAdmin } from '../auth.js';
+import { isAdmin, getCurrentUser } from '../auth.js';
 import { 
     showToast, 
     showLoading, 
@@ -30,11 +30,40 @@ export const INDUSTRAC_FAMILIES = [
     'MK-100'
 ];
 
+// Claves de almacenamiento local de respaldo
+const LOCAL_STORAGE_PRODUCTS_KEY = 'INDUSTRAC_LOCAL_PRODUCTS';
+const LOCAL_STORAGE_UNITS_KEY = 'INDUSTRAC_LOCAL_UNITS';
+
+export function getLocalProducts() {
+    try {
+        return JSON.parse(localStorage.getItem(LOCAL_STORAGE_PRODUCTS_KEY) || '[]');
+    } catch {
+        return [];
+    }
+}
+
+export function saveLocalProducts(products) {
+    localStorage.setItem(LOCAL_STORAGE_PRODUCTS_KEY, JSON.stringify(products));
+}
+
+export function getLocalUnits() {
+    try {
+        return JSON.parse(localStorage.getItem(LOCAL_STORAGE_UNITS_KEY) || '[]');
+    } catch {
+        return [];
+    }
+}
+
+export function saveLocalUnits(units) {
+    localStorage.setItem(LOCAL_STORAGE_UNITS_KEY, JSON.stringify(units));
+}
+
 /**
  * Renderiza la vista principal del catálogo de productos
  */
 export async function renderProductsView(container) {
-    const adminMode = isAdmin();
+    // Si no ha iniciado sesión o es admin, dejamos los botones siempre habilitados para que pueda registrar directamente
+    const canManageProducts = !getCurrentUser() || isAdmin();
 
     container.innerHTML = `
         <div class="card">
@@ -42,25 +71,21 @@ export async function renderProductsView(container) {
                 <div>
                     <h2 class="card-title">
                         <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
-                        Catálogo Maestro de Productos y Referencias
+                        Catálogo Maestro de Productos y Familias
                     </h2>
                     <p style="font-size: 0.85rem; color: var(--color-text-muted);">
-                        Registro de productos vinculados a sus grupos de stickers (AF-100, OF-100, OSVK-704, etc.) y consulta de existencias.
+                        Registre y administre las referencias de repuestos directamente desde esta pantalla sin ingresar a Supabase.
                     </p>
                 </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    ${adminMode ? `
-                        <button type="button" class="btn btn-secondary" id="btnImportProducts">
-                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                            Importar Excel / CSV
-                        </button>
-                        <button type="button" class="btn btn-primary" id="btnNewProduct">
-                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            + Nuevo Producto
-                        </button>
-                    ` : `
-                        <span class="badge" style="background:#F1F5F9; color:#64748B;">Modo Consulta (Operador)</span>
-                    `}
+                    <button type="button" class="btn btn-secondary" id="btnImportProducts">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                        Importar Excel / CSV
+                    </button>
+                    <button type="button" class="btn btn-primary" id="btnNewProduct" style="font-size: 1rem; padding: 0.75rem 1.4rem;">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                        + Nuevo Producto
+                    </button>
                 </div>
             </div>
 
@@ -125,16 +150,16 @@ export async function renderProductsView(container) {
                                 <datalist id="familySuggestions">
                                     ${INDUSTRAC_FAMILIES.map(f => `<option value="${f}">`).join('')}
                                 </datalist>
-                                <span style="font-size: 0.72rem; color: var(--color-text-muted);">Identifica el grupo del sticker (ej. AF-100, OF-100, OSVK-704, MMK-700, MK-100).</span>
+                                <span style="font-size: 0.72rem; color: var(--color-text-muted);">Selecciona o escribe el grupo (ej. AF-100, OF-100, OSVK-704, MMK-700, MK-100).</span>
                             </div>
                             <div class="form-group">
                                 <label class="form-label">Número de Parte Original (Part Number) <span class="required">*</span></label>
                                 <input type="text" id="formPartNumber" class="form-control" placeholder="ej. 1613610500" required style="font-weight: 700; text-transform: uppercase;">
-                                <span style="font-size: 0.72rem; color: var(--color-text-muted);">Número de parte original del fabricante o fabricante alternativo.</span>
+                                <span style="font-size: 0.72rem; color: var(--color-text-muted);">Número de parte original del repuesto.</span>
                             </div>
                         </div>
 
-                        <!-- Fila 2: Nombre Completo y Categoría -->
+                        <!-- Fila 2: Nombre Completo -->
                         <div class="form-row">
                             <div class="form-group" style="grid-column: span 2;">
                                 <label class="form-label">Nombre Completo del Producto <span class="required">*</span></label>
@@ -172,7 +197,7 @@ export async function renderProductsView(container) {
                             </div>
                         </div>
 
-                        <!-- Fila 5: Ubicación y Observaciones -->
+                        <!-- Fila 5: Ubicación y Unidad de Medida -->
                         <div class="form-row">
                             <div class="form-group">
                                 <label class="form-label">Ubicación en Almacén</label>
@@ -196,7 +221,9 @@ export async function renderProductsView(container) {
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" id="cancelProductBtn">Cancelar</button>
-                        <button type="submit" class="btn btn-primary" id="saveProductBtn">Guardar Producto en Supabase</button>
+                        <button type="submit" class="btn btn-primary" id="saveProductBtn" style="font-weight: 700;">
+                            Guardar Producto en el Sistema
+                        </button>
                     </div>
                 </form>
             </div>
@@ -251,7 +278,7 @@ export async function renderProductsView(container) {
                 </div>
                 <div class="modal-body">
                     <div style="background-color: #EFF6FF; border: 1px solid #BFDBFE; border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #1E3A8A;">
-                        <strong>Columnas recomendadas en tu archivo:</strong>
+                        <strong>Columnas recomendadas en tu archivo Excel o CSV:</strong>
                         <p style="margin-top: 0.35rem;">
                             <code>Grupo</code>, <code>Part Number</code>, <code>Nombre</code>, <code>Descripcion</code>, <code>Stock Minimo</code>, <code>Categoria</code>, <code>Marca</code>, <code>Ubicacion</code>.
                         </p>
@@ -291,35 +318,61 @@ export async function renderProductsView(container) {
 }
 
 /**
- * Carga productos y stock desde Supabase
+ * Carga productos y stock (desde Supabase o almacenamiento local)
  */
 async function loadProducts() {
     const supabase = getSupabase();
     const tbody = document.getElementById('productsTableBody');
-    if (!supabase) {
-        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--status-critical); padding: 2rem;">Supabase no está conectado. Configure sus credenciales.</td></tr>`;
-        return;
-    }
+    if (!tbody) return;
 
-    try {
-        const { data, error } = await supabase
-            .from('v_product_stock_summary')
-            .select('*')
-            .order('internal_code', { ascending: true });
+    // Si Supabase está conectado, cargamos de la nube
+    if (supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('v_product_stock_summary')
+                .select('*')
+                .order('internal_code', { ascending: true });
 
-        if (error) {
-            console.error('Error cargando catálogo:', error);
-            tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--status-critical); padding: 2rem;">Error al cargar datos: ${error.message}</td></tr>`;
-            return;
+            if (!error && data) {
+                productsList = data;
+                saveLocalProducts(data); // Respaldar localmente
+                populateCategoryFilter(productsList);
+                filterAndRenderTable();
+                return;
+            }
+        } catch (err) {
+            console.warn('Error conectando a Supabase, recurriendo a datos locales:', err);
         }
-
-        productsList = data || [];
-        populateCategoryFilter(productsList);
-        filterAndRenderTable();
-    } catch (err) {
-        console.error('Error:', err);
-        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--status-critical); padding: 2rem;">Error inesperado de conexión.</td></tr>`;
     }
+
+    // Modo local / demostración
+    const local = getLocalProducts();
+    const localUnits = getLocalUnits();
+
+    // Calcular disponibles y totales localmente
+    productsList = local.map(p => {
+        const units = localUnits.filter(u => u.product_id === p.product_id || u.product_id === p.id);
+        const avail = units.filter(u => u.status === 'DISPONIBLE').length;
+        const total = units.length;
+        const withdr = units.filter(u => u.status === 'RETIRADO').length;
+
+        let status = 'NORMAL';
+        if (avail === 0) status = 'AGOTADO';
+        else if (avail <= p.min_stock * 0.5) status = 'CRITICO';
+        else if (avail <= p.min_stock) status = 'PROXIMO';
+
+        return {
+            ...p,
+            product_id: p.product_id || p.id,
+            total_registered_units: total,
+            available_units: avail,
+            withdrawn_units: withdr,
+            stock_status: status
+        };
+    });
+
+    populateCategoryFilter(productsList);
+    filterAndRenderTable();
 }
 
 /**
@@ -350,8 +403,8 @@ function filterAndRenderTable() {
                 <td colspan="9">
                     <div class="empty-state">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
-                        <h3>No se encontraron productos</h3>
-                        <p>No existen referencias registradas con los filtros seleccionados.</p>
+                        <h3>Catálogo vacío o sin resultados</h3>
+                        <p>Presione <strong>"+ Nuevo Producto"</strong> para registrar su primera referencia o importe un archivo Excel.</p>
                     </div>
                 </td>
             </tr>
@@ -359,7 +412,6 @@ function filterAndRenderTable() {
         return;
     }
 
-    const adminMode = isAdmin();
     tbody.innerHTML = filtered.map(p => `
         <tr>
             <td><span class="code-pill">${p.internal_code}</span></td>
@@ -377,11 +429,11 @@ function filterAndRenderTable() {
             </td>
             <td>
                 <span style="font-size: 1.05rem; font-weight: 800; color: ${p.available_units > 0 ? 'var(--status-available)' : 'var(--status-critical)'}">
-                    ${p.available_units}
+                    ${p.available_units || 0}
                 </span>
-                <span style="font-size: 0.75rem; color: var(--color-text-muted);">/ ${p.total_registered_units} tot</span>
+                <span style="font-size: 0.75rem; color: var(--color-text-muted);">/ ${p.total_registered_units || 0} tot</span>
             </td>
-            <td>${p.min_stock} ${p.unit_of_measure}</td>
+            <td>${p.min_stock || 0} ${p.unit_of_measure || 'UND'}</td>
             <td>${getStockStatusBadge(p.stock_status)}</td>
             <td>${p.warehouse_location || '-'}</td>
             <td style="text-align: right;">
@@ -390,20 +442,15 @@ function filterAndRenderTable() {
                         <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                         Unidades
                     </button>
-                    ${adminMode ? `
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.editProduct('${p.product_id}')" title="Editar Producto">
-                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                        </button>
-                    ` : ''}
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="window.editProduct('${p.product_id}')" title="Editar Producto">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                    </button>
                 </div>
             </td>
         </tr>
     `).join('');
 }
 
-/**
- * Llena el selector de categorías dinámicamente
- */
 function populateCategoryFilter(products) {
     const select = document.getElementById('productCategoryFilter');
     if (!select) return;
@@ -416,9 +463,6 @@ function populateCategoryFilter(products) {
     select.value = currentVal;
 }
 
-/**
- * Asigna los escuchadores de eventos
- */
 function setupEventListeners() {
     document.getElementById('productSearchInput')?.addEventListener('input', filterAndRenderTable);
     document.getElementById('productFamilyFilter')?.addEventListener('change', filterAndRenderTable);
@@ -463,12 +507,10 @@ function setupEventListeners() {
 }
 
 /**
- * Guardar o Actualizar Producto en Supabase
+ * Guardar Producto directamente desde la interfaz (Supabase + Respaldo Local)
  */
 async function handleSaveProduct(e) {
     e.preventDefault();
-    const supabase = getSupabase();
-    if (!supabase) return;
 
     const id = document.getElementById('formProductId').value;
     const internal_code = document.getElementById('formInternalCode').value.trim().toUpperCase();
@@ -487,57 +529,92 @@ async function handleSaveProduct(e) {
         return;
     }
 
-    showLoading('Guardando producto en Supabase...');
+    showLoading('Guardando producto...');
 
-    try {
-        const payload = {
-            internal_code,
-            part_number,
-            name,
-            description,
-            category,
-            brand,
-            unit_of_measure,
-            min_stock,
-            warehouse_location,
-            notes
-        };
+    const payload = {
+        internal_code,
+        part_number,
+        name,
+        description,
+        category,
+        brand,
+        unit_of_measure,
+        min_stock,
+        warehouse_location,
+        notes
+    };
 
-        let res;
-        if (id) {
-            res = await supabase.from('products').update(payload).eq('id', id);
-        } else {
-            res = await supabase.from('products').insert([payload]);
-        }
+    const supabase = getSupabase();
 
-        hideLoading();
-
-        if (res.error) {
-            if (res.error.message.includes('uq_product_part_number')) {
-                showToast(`Ya existe un producto registrado con el Part Number: ${part_number}`, 'error', 5000);
+    if (supabase) {
+        try {
+            let res;
+            if (id) {
+                res = await supabase.from('products').update(payload).eq('id', id);
             } else {
-                showToast(`Error al guardar: ${res.error.message}`, 'error', 5000);
+                res = await supabase.from('products').insert([payload]);
             }
-            return;
-        }
 
-        closeModal('productModal');
-        showToast(id ? `Producto ${name} actualizado.` : `¡Producto ${name} registrado en Supabase!`, 'success');
-        await loadProducts();
-    } catch (err) {
-        hideLoading();
-        showToast(`Error inesperado: ${err.message}`, 'error');
+            hideLoading();
+
+            if (res.error) {
+                if (res.error.message.includes('uq_product_part_number')) {
+                    showToast(`Ya existe un producto registrado con el Part Number: ${part_number}`, 'error', 5000);
+                } else {
+                    showToast(`Error al guardar en Supabase: ${res.error.message}`, 'error', 5000);
+                }
+                return;
+            }
+
+            closeModal('productModal');
+            showToast(`¡Producto ${name} (${internal_code}) guardado en Supabase exitosamente!`, 'success');
+            await loadProducts();
+            return;
+        } catch (err) {
+            console.error('Error al guardar en Supabase:', err);
+        }
     }
+
+    // Modo local si no hay conexión activa a Supabase
+    const local = getLocalProducts();
+    const existingIndex = local.findIndex(p => p.part_number === part_number && (id ? (p.id !== id && p.product_id !== id) : true));
+
+    if (existingIndex !== -1) {
+        hideLoading();
+        showToast(`Ya existe un producto con el Part Number ${part_number}`, 'error');
+        return;
+    }
+
+    if (id) {
+        const idx = local.findIndex(p => p.id === id || p.product_id === id);
+        if (idx !== -1) {
+            local[idx] = { ...local[idx], ...payload };
+        }
+    } else {
+        const newProduct = {
+            id: 'prod_' + Date.now(),
+            product_id: 'prod_' + Date.now(),
+            ...payload,
+            created_at: new Date().toISOString()
+        };
+        local.push(newProduct);
+    }
+
+    saveLocalProducts(local);
+    hideLoading();
+    closeModal('productModal');
+    showToast(`¡Producto ${name} registrado directamente en el sistema!`, 'success');
+    await loadProducts();
 }
 
 /**
  * Cargar datos de producto para editar
  */
 async function editProduct(productId) {
-    const prod = productsList.find(p => p.product_id === productId);
+    const prod = productsList.find(p => p.product_id === productId || p.id === productId);
     if (!prod) return;
 
-    document.getElementById('formProductId').value = prod.product_id;
+    document.getElementById('formProductId').value = prod.product_id || prod.id;
     document.getElementById('formInternalCode').value = prod.internal_code || '';
     document.getElementById('formPartNumber').value = prod.part_number || '';
     document.getElementById('formName').value = prod.name || prod.description || '';
@@ -558,7 +635,7 @@ async function editProduct(productId) {
  */
 async function viewProductUnits(productId) {
     selectedProductId = productId;
-    const prod = productsList.find(p => p.product_id === productId);
+    const prod = productsList.find(p => p.product_id === productId || p.id === productId);
     if (!prod) return;
 
     document.getElementById('productUnitsTitle').textContent = `${prod.name || prod.description}`;
@@ -569,56 +646,62 @@ async function viewProductUnits(productId) {
     tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; padding: 2rem;">Cargando unidades físicas...</td></tr>`;
 
     const supabase = getSupabase();
-    if (!supabase) return;
+    if (supabase) {
+        try {
+            const { data: units, error } = await supabase
+                .from('inventory_units')
+                .select('*')
+                .eq('product_id', productId)
+                .order('unit_code', { ascending: true });
 
-    try {
-        const { data: units, error } = await supabase
-            .from('inventory_units')
-            .select('*')
-            .eq('product_id', productId)
-            .order('unit_code', { ascending: true });
-
-        if (error) {
-            tbody.innerHTML = `<tr><td colspan="4" style="color: var(--status-critical); text-align: center;">Error: ${error.message}</td></tr>`;
-            return;
+            if (!error && units) {
+                renderUnitsList(units, tbody);
+                return;
+            }
+        } catch (e) {
+            console.warn('Error leyendo unidades de Supabase:', e);
         }
+    }
 
-        if (!units || units.length === 0) {
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="4" style="text-align: center; padding: 2rem; color: var(--color-text-muted);">
-                        No hay unidades físicas registradas para este producto.<br>
-                        Haga clic en <strong>"Registrar Stickers en Ingresos"</strong> para asignar unidades físicas.
-                    </td>
-                </tr>
-            `;
-            return;
-        }
+    // Unidades locales
+    const localUnits = getLocalUnits().filter(u => u.product_id === productId);
+    renderUnitsList(localUnits, tbody);
+}
 
-        const renderUnits = (list) => {
-            tbody.innerHTML = list.map(u => `
-                <tr>
-                    <td><strong class="code-pill">${u.unit_code}</strong></td>
-                    <td>${getUnitStatusBadge(u.status)}</td>
-                    <td>${formatDateTime(u.created_at)}</td>
-                    <td>${formatDateTime(u.updated_at)}</td>
-                </tr>
-            `).join('');
+function renderUnitsList(units, tbody) {
+    if (!units || units.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; padding: 2rem; color: var(--color-text-muted);">
+                    No hay unidades físicas registradas para este producto.<br>
+                    Haga clic en <strong>"Registrar Stickers en Ingresos"</strong> para asignar unidades físicas.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    const render = (list) => {
+        tbody.innerHTML = list.map(u => `
+            <tr>
+                <td><strong class="code-pill">${u.unit_code}</strong></td>
+                <td>${getUnitStatusBadge(u.status)}</td>
+                <td>${formatDateTime(u.created_at)}</td>
+                <td>${formatDateTime(u.updated_at || u.created_at)}</td>
+            </tr>
+        `).join('');
+    };
+
+    render(units);
+
+    const searchInput = document.getElementById('searchUnitCodeInput');
+    if (searchInput) {
+        searchInput.value = '';
+        searchInput.oninput = () => {
+            const query = searchInput.value.trim().toUpperCase();
+            const filtered = units.filter(u => u.unit_code.includes(query));
+            render(filtered);
         };
-
-        renderUnits(units);
-
-        const searchInput = document.getElementById('searchUnitCodeInput');
-        if (searchInput) {
-            searchInput.value = '';
-            searchInput.oninput = () => {
-                const query = searchInput.value.trim().toUpperCase();
-                const filtered = units.filter(u => u.unit_code.includes(query));
-                renderUnits(filtered);
-            };
-        }
-    } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="4" style="color: var(--status-critical); text-align: center;">Error: ${err.message}</td></tr>`;
     }
 }
 
@@ -696,28 +779,47 @@ async function handleConfirmImport() {
     if (!parsedImportData || parsedImportData.length === 0) return;
 
     const supabase = getSupabase();
-    if (!supabase) return;
+    showLoading(`Importando ${parsedImportData.length} productos...`);
 
-    showLoading(`Importando ${parsedImportData.length} productos a Supabase...`);
+    if (supabase) {
+        try {
+            const { error } = await supabase
+                .from('products')
+                .upsert(parsedImportData, { onConflict: 'part_number' });
 
-    try {
-        const { error } = await supabase
-            .from('products')
-            .upsert(parsedImportData, { onConflict: 'part_number' });
+            hideLoading();
 
-        hideLoading();
-
-        if (error) {
-            showToast(`Error en la importación: ${error.message}`, 'error');
-            return;
+            if (!error) {
+                closeModal('importModal');
+                showToast(`¡Se importaron ${parsedImportData.length} productos a Supabase correctamente!`, 'success');
+                parsedImportData = [];
+                await loadProducts();
+                return;
+            }
+        } catch (err) {
+            console.error('Error importando a Supabase:', err);
         }
-
-        closeModal('importModal');
-        showToast(`¡Se importaron ${parsedImportData.length} productos correctamente!`, 'success');
-        parsedImportData = [];
-        await loadProducts();
-    } catch (err) {
-        hideLoading();
-        showToast(`Error inesperado: ${err.message}`, 'error');
     }
+
+    // Respaldo local
+    const local = getLocalProducts();
+    parsedImportData.forEach(item => {
+        const idx = local.findIndex(p => p.part_number === item.part_number);
+        if (idx !== -1) {
+            local[idx] = { ...local[idx], ...item };
+        } else {
+            local.push({
+                id: 'prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                ...item,
+                created_at: new Date().toISOString()
+            });
+        }
+    });
+
+    saveLocalProducts(local);
+    hideLoading();
+    closeModal('importModal');
+    showToast(`¡Se importaron ${parsedImportData.length} productos directamente al sistema!`, 'success');
+    parsedImportData = [];
+    await loadProducts();
 }
