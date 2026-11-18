@@ -270,10 +270,19 @@ function setupExitListeners() {
     });
 
     // Re-verificar código editado en modal
-    recheckBtn?.addEventListener('click', () => {
-        const code = document.getElementById('modalExitUnitCode').value.trim().toUpperCase();
+    const modalUnitInput = document.getElementById('modalExitUnitCode');
+    const triggerRecheck = () => {
+        const code = modalUnitInput?.value.trim().toUpperCase();
         if (code) {
             lookupAndDisplayUnit(code);
+        }
+    };
+
+    recheckBtn?.addEventListener('click', triggerRecheck);
+    modalUnitInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            triggerRecheck();
         }
     });
 
@@ -368,8 +377,12 @@ async function lookupAndDisplayUnit(unitCode) {
                 hideLoading();
 
                 if (!data.found) {
-                    showToast('CÓDIGO NO REGISTRADO EN EL INVENTARIO.', 'error', 5000);
-                    displayExitModalWithWarning(cleanCode, null, 'CÓDIGO NO REGISTRADO EN EL INVENTARIO.');
+                    showToast(`Código no encontrado: ${cleanCode}`, 'error', 5000);
+                    displayExitModalWithWarning(
+                        cleanCode, 
+                        null, 
+                        `CÓDIGO NO REGISTRADO: '${cleanCode}'. Si el sticker físico es diferente (ej. OF-600-00050), corríjalo abajo y pulse "Verificar".`
+                    );
                     return;
                 }
 
@@ -409,8 +422,12 @@ async function lookupAndDisplayUnit(unitCode) {
     hideLoading();
 
     if (!unit) {
-        showToast('CÓDIGO NO REGISTRADO EN EL INVENTARIO.', 'error', 5000);
-        displayExitModalWithWarning(cleanCode, null, 'CÓDIGO NO REGISTRADO EN EL INVENTARIO.');
+        showToast(`Código no encontrado: ${cleanCode}`, 'error', 5000);
+        displayExitModalWithWarning(
+            cleanCode, 
+            null, 
+            `CÓDIGO NO REGISTRADO: '${cleanCode}'. Si el sticker físico es diferente (ej. OF-600-00050), corríjalo abajo y pulse "Verificar".`
+        );
         return;
     }
 

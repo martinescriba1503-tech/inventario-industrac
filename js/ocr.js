@@ -212,50 +212,89 @@ export function preprocessImageFile(file, canvasElement) {
 
 /**
  * Corrige confusiones ópticas comunes de OCR en códigos de almacén INDUSTRAC
- * ej. OF-600-O0001 -> OF-600-00001 (letra O por número 0)
+ * y descarta ruido de fondo como texto de teclado o etiquetas "CODE:"
+ * Formato oficial: [GRUPO]-[NUMERO]-[CORRELATIVO 5 DÍGITOS] (ej. OF-600-00050, AF-100-00001)
  */
 export function sanitizeIndustracCode(rawText) {
     if (!rawText) return null;
 
-    // Normalizar: mayúsculas, cambiar espacios o puntos entre grupos por guiones
-    let clean = rawText.toUpperCase()
-        .replace(/[\.\s_]+/g, '-')
-        .replace(/[^A-Z0-9-]/g, '')
-        .trim();
+    console.log('--- OCR RAW TEXT ---');
+    console.log(rawText);
 
-    // Eliminar guiones múltiples
-    clean = clean.replace(/-+/g, '-');
+    // 1. Eliminar etiquetas comunes impresas en el sticker como "CODE:", "CODE", "CODIGO:"
+    let text = rawText
+        .replace(/CODE\s*:\s*/gi, ' ')
+        .replace(/CODIGO\s*:\s*/gi, ' ')
+        .replace(/COD\s*:\s*/gi, ' ')
+        .toUpperCase();
 
-    // Patrón 1: Formato triple con correlativo: GRUPO-NUMERO-CORRELATIVO (ej. AF-100-00001, OSVK-704-00002)
-    let match = clean.match(/([A-Z0-9]+)-([A-Z0-9]+)-([A-Z0-9]+)/);
+    // 2. Corregir OCR cuando lee cero antes de una letra de familia (0F -> OF, 0SVK -> OSVK)
+    text = text.replace(/0(?=[A-Z])/g, 'O');
+
+    // 3. Buscar primero el patrón oficial INDUSTRAC de 3 bloques:
+    // Bloque 1: Letras de la familia (OF, AF, OSVK, MMK, MK, etc. de 2 a 5 letras/dígitos ópticos)
+    // Bloque 2: Código numérico de familia (100, 600, 700, 704, etc. de 2 a 4 dígitos)
+    // Bloque 3: Correlativo de 5 dígitos (00001 a 99999, tolerando letras O, I, S por error óptico)
+    const strictPattern = /\b([A-Z0-9]{2,6})[\s\-_.:]+([0-9IOl]{2,4})[\s\-_.:]+([0-9A-Z]{4,6})\b/i;
+    let match = text.match(strictPattern);
+
     if (match) {
-        const prefix1 = match[1];
-        const prefix2 = match[2];
-        let suffix = match[3];
+        let family = match[1].toUpperCase().replace(/^0/, 'O');
+        let num = match[2].toUpperCase().replace(/O/g, '0').replace(/I|L/g, '1');
+        let correlative = match[3].toUpperCase();
 
-        // Corregir ópticamente el correlativo final (reemplazar letras por números)
-        suffix = suffix
-            .replace(/O|o|D|Q/g, '0')
-            .replace(/I|l|L/g, '1')
+        // Limpiar correlativo: corregir confusiones ópticas (O -> 0, I -> 1, S -> 5, etc.)
+        correlative = correlative
+            .replace(/O|D|Q/g, '0')
+            .replace(/I|L/g, '1')
             .replace(/Z/g, '2')
             .replace(/S/g, '5')
             .replace(/B/g, '8');
 
-        // Formatear correlativo a 5 dígitos si tiene dígitos
-        if (/^\d+$/.test(suffix)) {
-            suffix = suffix.padStart(5, '0');
+        // Asegurar 5 dígitos
+        if (/^\d+$/.test(correlative)) {
+            correlative = correlative.padStart(5, '0');
+            const finalCode = `${family}-${num}-${correlative}`;
+            console.log('✓ Código INDUSTRAC detectado con alta precisión:', finalCode);
+            return finalCode;
         }
-
-        return `${prefix1}-${prefix2}-${suffix}`;
     }
 
-    // Patrón 2: Formato doble (ej. MK-100 o similar)
-    match = clean.match(/([A-Z0-9]+)-([A-Z0-9]+)/);
-    if (match) {
-        return match[0];
+    // 4. Si no hubo match estricto con separadores, buscar si están pegados (ej. OF60000050 o OF-60000050)
+    const fusedPattern = /\b([A-Z0-9]{2,6})[-]?([0-9IOl]{2,4})[-]?([0-9A-Z]{4,6})\b/i;
+    let fusedMatch = text.match(fusedPattern);
+    if (fusedMatch) {
+        let family = fusedMatch[1].toUpperCase().replace(/^0/, 'O');
+        let num = fusedMatch[2].toUpperCase().replace(/O/g, '0').replace(/I|L/g, '1');
+        let correlative = fusedMatch[3].toUpperCase()
+            .replace(/O|D|Q/g, '0')
+            .replace(/I|L/g, '1')
+            .replace(/S/g, '5');
+        if (/^\d+$/.test(correlative)) {
+            correlative = correlative.padStart(5, '0');
+            const finalCode = `${family}-${num}-${correlative}`;
+            console.log('✓ Código INDUSTRAC detectado (unido):', finalCode);
+            return finalCode;
+        }
     }
 
-    return clean.length >= 4 ? clean : null;
+    // 5. Búsqueda por línea individual si el texto tiene saltos de línea
+    const lines = text.split(/[\r\n]+/);
+    for (const line of lines) {
+        const lineClean = line.replace(/[^A-Z0-9-]/g, '').trim();
+        const lineMatch = lineClean.match(/^([A-Z0-9]{2,6})-([0-9IOl]{2,4})-([0-9A-Z]{4,6})$/i);
+        if (lineMatch) {
+            let fam = lineMatch[1].replace(/^0/, 'O');
+            let n = lineMatch[2].replace(/O/g, '0').replace(/I|L/g, '1');
+            let corr = lineMatch[3].replace(/O|D|Q/g, '0').replace(/I|L/g, '1').replace(/S/g, '5').padStart(5, '0');
+            if (/^\d+$/.test(corr)) {
+                return `${fam}-${n}-${corr}`;
+            }
+        }
+    }
+
+    console.warn('No se detectó un código con el formato de sticker INDUSTRAC.');
+    return null;
 }
 
 /**
