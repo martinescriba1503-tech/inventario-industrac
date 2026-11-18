@@ -275,7 +275,10 @@ BEGIN
     END IF;
 
     v_user_id := auth.uid();
-    SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    IF v_user_id IS NOT NULL THEN
+        SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    END IF;
+    v_user_email := COALESCE(v_user_email, 'almacen@industrac.com');
 
     INSERT INTO public.inventory_units (product_id, unit_code, status)
     VALUES (p_product_id, v_clean_code, 'DISPONIBLE')
@@ -352,7 +355,10 @@ BEGIN
     END IF;
 
     v_user_id := auth.uid();
-    SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    IF v_user_id IS NOT NULL THEN
+        SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    END IF;
+    v_user_email := COALESCE(v_user_email, 'almacen@industrac.com');
 
     FOR i IN 0..(p_count - 1) LOOP
         v_current_num := p_start_num + i;
@@ -517,7 +523,10 @@ BEGIN
     END IF;
 
     v_user_id := auth.uid();
-    SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    IF v_user_id IS NOT NULL THEN
+        SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    END IF;
+    v_user_email := COALESCE(v_user_email, 'almacen@industrac.com');
 
     UPDATE public.inventory_units
     SET status = 'RETIRADO',
@@ -619,7 +628,10 @@ BEGIN
     END IF;
 
     v_user_id := auth.uid();
-    SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    IF v_user_id IS NOT NULL THEN
+        SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+    END IF;
+    v_user_email := COALESCE(v_user_email, 'almacen@industrac.com');
 
     UPDATE public.inventory_units
     SET status = 'DISPONIBLE',
@@ -682,45 +694,55 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
 
-CREATE POLICY "Usuarios autenticados pueden ver perfiles" 
-ON public.profiles FOR SELECT TO authenticated USING (true);
+-- 7.1 Limpiar políticas existentes para evitar errores de duplicidad
+DO $$
+BEGIN
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden ver perfiles" ON public.profiles;
+    DROP POLICY IF EXISTS "Solo admin o el propio usuario pueden editar perfiles" ON public.profiles;
+    DROP POLICY IF EXISTS "Acceso lectura perfiles" ON public.profiles;
+    DROP POLICY IF EXISTS "Acceso gestion perfiles" ON public.profiles;
 
-CREATE POLICY "Solo admin o el propio usuario pueden editar perfiles" 
-ON public.profiles FOR UPDATE TO authenticated 
-USING (auth.uid() = id OR public.is_admin())
-WITH CHECK (auth.uid() = id OR public.is_admin());
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden consultar productos" ON public.products;
+    DROP POLICY IF EXISTS "Solo administradores pueden crear o importar productos" ON public.products;
+    DROP POLICY IF EXISTS "Solo administradores pueden actualizar productos o stock minimo" ON public.products;
+    DROP POLICY IF EXISTS "Solo administradores pueden eliminar productos" ON public.products;
+    DROP POLICY IF EXISTS "Acceso lectura productos" ON public.products;
+    DROP POLICY IF EXISTS "Acceso gestion productos" ON public.products;
 
-CREATE POLICY "Usuarios autenticados pueden consultar productos" 
-ON public.products FOR SELECT TO authenticated USING (true);
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden consultar unidades" ON public.inventory_units;
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden registrar unidades" ON public.inventory_units;
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden actualizar estado de unidades" ON public.inventory_units;
+    DROP POLICY IF EXISTS "Acceso lectura unidades" ON public.inventory_units;
+    DROP POLICY IF EXISTS "Acceso gestion unidades" ON public.inventory_units;
 
-CREATE POLICY "Solo administradores pueden crear o importar productos" 
-ON public.products FOR INSERT TO authenticated 
-WITH CHECK (public.is_admin());
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden consultar movimientos" ON public.inventory_movements;
+    DROP POLICY IF EXISTS "Usuarios autenticados pueden insertar movimientos" ON public.inventory_movements;
+    DROP POLICY IF EXISTS "Acceso lectura movimientos" ON public.inventory_movements;
+    DROP POLICY IF EXISTS "Acceso gestion movimientos" ON public.inventory_movements;
+END $$;
 
-CREATE POLICY "Solo administradores pueden actualizar productos o stock minimo" 
-ON public.products FOR UPDATE TO authenticated 
-USING (public.is_admin())
-WITH CHECK (public.is_admin());
+-- 7.2 Políticas de Acceso Completo INDUSTRAC (Permite tanto anon como authenticated)
+-- Garantiza que la aplicación web almacene y consulte directamente en Supabase con la Anon Key pública
+CREATE POLICY "Acceso lectura perfiles" 
+ON public.profiles FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Solo administradores pueden eliminar productos" 
-ON public.products FOR DELETE TO authenticated 
-USING (public.is_admin());
+CREATE POLICY "Acceso gestion perfiles" 
+ON public.profiles FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Usuarios autenticados pueden consultar unidades" 
-ON public.inventory_units FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Acceso lectura productos" 
+ON public.products FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Usuarios autenticados pueden registrar unidades" 
-ON public.inventory_units FOR INSERT TO authenticated 
-WITH CHECK (true);
+CREATE POLICY "Acceso gestion productos" 
+ON public.products FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Usuarios autenticados pueden actualizar estado de unidades" 
-ON public.inventory_units FOR UPDATE TO authenticated 
-USING (true)
-WITH CHECK (true);
+CREATE POLICY "Acceso lectura unidades" 
+ON public.inventory_units FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Usuarios autenticados pueden consultar movimientos" 
-ON public.inventory_movements FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Acceso gestion unidades" 
+ON public.inventory_units FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Usuarios autenticados pueden insertar movimientos" 
-ON public.inventory_movements FOR INSERT TO authenticated 
-WITH CHECK (true);
+CREATE POLICY "Acceso lectura movimientos" 
+ON public.inventory_movements FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "Acceso gestion movimientos" 
+ON public.inventory_movements FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);

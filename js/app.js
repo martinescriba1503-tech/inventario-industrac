@@ -86,15 +86,19 @@ function updateUserUI(user, profile) {
  */
 function setupConfigModal() {
     const configBtn = document.getElementById('btnSidebarConfig');
+    const badgeBtn = document.getElementById('connectionStatusBadge');
     const closeBtn = document.getElementById('closeConfigModal');
     const cancelBtn = document.getElementById('cancelConfigBtn');
     const form = document.getElementById('configForm');
 
-    configBtn?.addEventListener('click', () => {
+    const openConfig = () => {
         document.getElementById('cfgSupabaseUrl').value = window.localStorage.getItem('INDUSTRAC_SUPABASE_URL') || '';
         document.getElementById('cfgSupabaseAnonKey').value = window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY') || '';
         openModal('configModal');
-    });
+    };
+
+    configBtn?.addEventListener('click', openConfig);
+    badgeBtn?.addEventListener('click', openConfig);
 
     closeBtn?.addEventListener('click', () => closeModal('configModal'));
     cancelBtn?.addEventListener('click', () => closeModal('configModal'));
