@@ -4,13 +4,13 @@
  */
 
 // Configuración de Supabase
-// Puedes configurar tus credenciales aquí o guardarlas desde la interfaz del sistema
+// Credenciales oficiales de INDUSTRAC Almacén
 export const SUPABASE_CONFIG = {
-    // URL de tu proyecto Supabase (limpia sin /rest/v1)
+    // URL oficial del proyecto Supabase
     url: (window.localStorage.getItem('INDUSTRAC_SUPABASE_URL') || 'https://hkenmxtwlguapsjbwwhv.supabase.co')
         .trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, ''),
-    // Clave anónima pública (anon key) de Supabase
-    anonKey: (window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY') || '').trim()
+    // Clave pública oficial (Publishable / Anon Key)
+    anonKey: (window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY') || 'sb_publishable_3Gcb3fzYLWS69zjNYNVnVg_atYJ_Vr0').trim()
 };
 
 // Variable global del cliente
@@ -23,7 +23,7 @@ export function getSupabase() {
     if (supabaseClient) return supabaseClient;
 
     const rawUrl = SUPABASE_CONFIG.url || window.localStorage.getItem('INDUSTRAC_SUPABASE_URL') || 'https://hkenmxtwlguapsjbwwhv.supabase.co';
-    const rawKey = SUPABASE_CONFIG.anonKey || window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY');
+    const rawKey = SUPABASE_CONFIG.anonKey || window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY') || 'sb_publishable_3Gcb3fzYLWS69zjNYNVnVg_atYJ_Vr0';
 
     const url = rawUrl.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
     const key = rawKey ? rawKey.trim() : '';
