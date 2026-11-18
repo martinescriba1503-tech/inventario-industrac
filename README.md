@@ -62,52 +62,44 @@ inventario/
 
 ## 3. Configuración de Base de Datos en Supabase
 
-1. Cree un proyecto nuevo en [Supabase](https://supabase.com/).
-2. Diríjase a la sección **SQL Editor** en el panel lateral de Supabase.
+1. Ingrese a su proyecto en [Supabase](https://supabase.com/).
+2. Diríjase a la sección **SQL Editor** en el panel lateral de Supabase (`>_`).
 3. Abra el archivo `supabase/schema.sql` de este repositorio, copie su contenido completo y péguelo en el editor de Supabase.
 4. Presione **Run**. Este script creará:
-   * Tablas `profiles`, `products`, `inventory_units`, `inventory_movements`.
-   * Vista `v_product_stock_summary`.
-   * Triggers de actualización automática y creación de perfil con el rol correspondiente.
-   * Funciones atómicas RPC: `register_unit_entry`, `lookup_unit_for_exit`, `register_unit_exit` y `register_unit_return`.
-   * Políticas de seguridad RLS.
+   * Tablas `profiles`, `products` (con nombres y familias), `inventory_units` y `inventory_movements`.
+   * Vistas automáticas: `v_product_stock_summary` y `v_family_stock_summary` (resumen por familias para el Dashboard).
+   * Funciones atómicas RPC:
+     * `register_batch_unit_range`: para cargar lotes de stock de 50 o más unidades de golpe.
+     * `register_unit_entry`: para ingresos individuales con validación de duplicados.
+     * `lookup_unit_for_exit`: para consulta instantánea por OCR o manual.
+     * `register_unit_exit`: para salidas atómicas bloqueantes (`FOR UPDATE`).
+     * `register_unit_return`: para devoluciones directas a estado disponible.
+     * `get_next_correlative`: cálculo seguro del siguiente número correlativo por familia.
+   * Políticas de seguridad RLS universales para acceso web directo con la `anon key`.
 
 ---
 
 ## 4. Ejecución Local
 
-Para probar el aplicativo en su computadora o en la red local:
+Para probar el aplicativo en su computadora o en su red local:
 
 ```bash
-# Opción con npx (Node.js instalado)
-npx serve .
-
-# O con Python
-python -m http.server 3000
+# Servidor local ligero integrado
+node server.js
 ```
 
-Abra su navegador en `http://localhost:3000`.
-
-Al ingresar por primera vez:
-1. Haga clic en el ícono de engranaje en la esquina inferior izquierda (o barra superior).
-2. Pegue la **URL de Supabase** y la **Anon Key** de su proyecto.
-3. Regístrese con su correo. El primer usuario registrado obtendrá automáticamente el rol de **Administrador**.
-
-> **Nota para cámaras en celulares:** Los navegadores móviles exigen conexión segura (HTTPS o `localhost`) para permitir el acceso a la cámara. Al desplegar en Vercel, HTTPS se activa de forma automática y gratuita.
+Abra su navegador en:
+* **Computadora:** `http://localhost:3000`
+* **Celular (en la misma red Wi-Fi):** `http://<IP_LOCAL>:3000`
 
 ---
 
 ## 5. Despliegue en Vercel y GitHub
 
-1. Inicialice el repositorio Git y suba los cambios a GitHub:
-   ```bash
-   git init
-   git add .
-   git commit -m "feat: Sistema de Control de Almacen INDUSTRAC v1.0"
-   git branch -M main
-   git remote add origin https://github.com/TU_USUARIO/inventario-industrac.git
-   git push -u origin main
-   ```
-2. Ingrese a [Vercel](https://vercel.com/) y seleccione **Add New Project** -> importe su repositorio de GitHub.
-3. Como es un proyecto web nativo modular (HTML/CSS/JS), Vercel lo detectará automáticamente y lo desplegará con SSL (HTTPS) activado.
+* **Repositorio Oficial:** [https://github.com/martinescriba1503-tech/inventario-industrac](https://github.com/martinescriba1503-tech/inventario-industrac)
+* **Despliegue en Vercel:**
+  1. Ingrese a [vercel.com/new](https://vercel.com/new).
+  2. Importe el repositorio `martinescriba1503-tech/inventario-industrac`.
+  3. Presione **Deploy** (no requiere configuración de build).
+  4. Vercel le otorgará una URL con HTTPS automático para que la cámara del celular funcione nativamente en cualquier lugar.
 
