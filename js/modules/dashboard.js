@@ -1,7 +1,7 @@
 /**
  * SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
- * Módulo 1: Dashboard y Panel Principal (Versión 1.1)
- * Incluye visualización de Inventario Agrupado por Familias (AF-100, OF-100, etc.)
+ * Módulo 1: Dashboard y Panel Principal (Versión 1.3)
+ * Conexión reactiva en tiempo real con Supabase y respaldo local instantáneo
  */
 
 import { getSupabase } from '../config.js';
@@ -10,7 +10,12 @@ import {
     formatDateTime, 
     getStockStatusBadge 
 } from '../utils/ui.js';
-import { INDUSTRAC_FAMILIES } from './products.js';
+import { 
+    INDUSTRAC_FAMILIES, 
+    getLocalProducts, 
+    getLocalUnits, 
+    getLocalMovements 
+} from './products.js';
 
 /**
  * Renderiza el Dashboard
@@ -72,7 +77,7 @@ export async function renderDashboardView(container) {
             </div>
         </div>
 
-        <!-- NUEVA SECCIÓN: Inventario Agrupado por Grupos / Familias (AF-100, OF-100, etc.) -->
+        <!-- SECCIÓN: Inventario Agrupado por Grupos / Familias (AF-100, OF-100, OF-600, etc.) -->
         <div class="card">
             <div class="card-header">
                 <div>
@@ -81,13 +86,19 @@ export async function renderDashboardView(container) {
                         Inventario Agrupado por Familias de Repuestos
                     </h3>
                     <p style="font-size: 0.82rem; color: var(--color-text-muted);">
-                        Control de existencias consolidado según los grupos de stickers de almacén.
+                        Control consolidado de existencias según los grupos de stickers de almacén.
                     </p>
                 </div>
-                <a href="#/productos" class="btn btn-secondary btn-sm">Ver Catálogo Completo</a>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshDashboard" title="Actualizar datos">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        Actualizar
+                    </button>
+                    <a href="#/productos" class="btn btn-primary btn-sm">Ver Catálogo</a>
+                </div>
             </div>
 
-            <div id="familiesGridContainer" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem;">
+            <div id="familiesGridContainer" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1rem;">
                 <div style="text-align: center; color: var(--color-text-muted); padding: 1.5rem; grid-column: 1 / -1;">
                     Cargando existencias por familias...
                 </div>
@@ -150,102 +161,152 @@ export async function renderDashboardView(container) {
         </div>
     `;
 
+    document.getElementById('btnRefreshDashboard')?.addEventListener('click', loadDashboardData);
     await loadDashboardData();
 }
 
 /**
- * Consulta Supabase para poblar los indicadores y las tarjetas de familias
+ * Consulta Supabase o almacenamiento local para sincronizar todos los indicadores
  */
 async function loadDashboardData() {
     const supabase = getSupabase();
-    if (!supabase) return;
+    let stockSummary = null;
+    let recentMovs = [];
 
-    try {
-        // 1. Resumen de Productos y Stock
-        const { data: stockSummary, error: stockErr } = await supabase
-            .from('v_product_stock_summary')
-            .select('*');
+    // Intento 1: Consultar Supabase si está disponible
+    if (supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('v_product_stock_summary')
+                .select('*');
 
-        if (!stockErr && stockSummary) {
-            let totalRefs = stockSummary.length;
-            let totalUnits = 0;
-            let availableUnits = 0;
-            let withdrawnUnits = 0;
-            const alertsList = [];
+            if (!error && data && data.length > 0) {
+                stockSummary = data;
+            }
 
-            // Diccionario para agrupar por familia de manera local y ultra rápida
-            const familiesMap = {};
+            const { data: movs } = await supabase
+                .from('inventory_movements')
+                .select(`
+                    created_at,
+                    movement_type,
+                    unit_code,
+                    products ( name, description, part_number )
+                `)
+                .order('created_at', { ascending: false })
+                .limit(8);
 
-            // Inicializar las familias oficiales de INDUSTRAC
-            INDUSTRAC_FAMILIES.forEach(f => {
-                familiesMap[f] = {
-                    family_code: f,
-                    total_products: 0,
-                    total_units: 0,
-                    available_units: 0,
-                    withdrawn_units: 0
-                };
-            });
+            if (movs && movs.length > 0) {
+                recentMovs = movs;
+            }
+        } catch (err) {
+            console.warn('Error leyendo Supabase en Dashboard, usando datos locales:', err);
+        }
+    }
 
-            stockSummary.forEach(p => {
-                totalUnits += Number(p.total_registered_units || 0);
-                availableUnits += Number(p.available_units || 0);
-                withdrawnUnits += Number(p.withdrawn_units || 0);
+    // Intento 2: Cargar datos locales (para funcionamiento 100% autónomo)
+    if (!stockSummary || stockSummary.length === 0) {
+        const localProds = getLocalProducts();
+        const localUnits = getLocalUnits();
 
-                if (p.stock_status === 'PROXIMO' || p.stock_status === 'CRITICO' || p.stock_status === 'AGOTADO') {
-                    alertsList.push(p);
-                }
+        stockSummary = localProds.map(p => {
+            const pid = p.product_id || p.id;
+            const units = localUnits.filter(u => u.product_id === pid);
+            const avail = units.filter(u => u.status === 'DISPONIBLE').length;
+            const withdr = units.filter(u => u.status === 'RETIRADO').length;
+            const total = units.length;
 
-                const fam = p.internal_code || 'SIN_GRUPO';
-                if (!familiesMap[fam]) {
-                    familiesMap[fam] = {
-                        family_code: fam,
-                        total_products: 0,
-                        total_units: 0,
-                        available_units: 0,
-                        withdrawn_units: 0
-                    };
-                }
+            let status = 'NORMAL';
+            if (avail === 0) status = 'AGOTADO';
+            else if (avail <= p.min_stock * 0.5) status = 'CRITICO';
+            else if (avail <= p.min_stock) status = 'PROXIMO';
 
-                familiesMap[fam].total_products++;
-                familiesMap[fam].total_units += Number(p.total_registered_units || 0);
-                familiesMap[fam].available_units += Number(p.available_units || 0);
-                familiesMap[fam].withdrawn_units += Number(p.withdrawn_units || 0);
-            });
+            return {
+                ...p,
+                product_id: pid,
+                total_registered_units: total,
+                available_units: avail,
+                withdrawn_units: withdr,
+                stock_status: status
+            };
+        });
 
-            document.getElementById('dashTotalRefs').textContent = totalRefs;
-            document.getElementById('dashTotalUnits').textContent = totalUnits;
-            document.getElementById('dashAvailableUnits').textContent = availableUnits;
-            document.getElementById('dashWithdrawnUnits').textContent = withdrawnUnits;
+        if (recentMovs.length === 0) {
+            recentMovs = getLocalMovements().slice(0, 8);
+        }
+    }
 
-            // Renderizar tarjetas por familias
-            renderFamiliesGrid(Object.values(familiesMap));
+    // Procesar métricas globales
+    let totalRefs = stockSummary.length;
+    let totalUnits = 0;
+    let availableUnits = 0;
+    let withdrawnUnits = 0;
+    const alertsList = [];
+    const familiesMap = {};
 
-            // Renderizar alertas
-            renderDashboardAlerts(alertsList);
+    // Inicializar familias oficiales reconocidas
+    INDUSTRAC_FAMILIES.forEach(f => {
+        familiesMap[f] = {
+            family_code: f,
+            total_products: 0,
+            total_units: 0,
+            available_units: 0,
+            withdrawn_units: 0
+        };
+    });
+
+    stockSummary.forEach(p => {
+        const pTotal = Number(p.total_registered_units || 0);
+        const pAvail = Number(p.available_units || 0);
+        const pWithdr = Number(p.withdrawn_units || 0);
+
+        totalUnits += pTotal;
+        availableUnits += pAvail;
+        withdrawnUnits += pWithdr;
+
+        if (p.stock_status === 'PROXIMO' || p.stock_status === 'CRITICO' || p.stock_status === 'AGOTADO') {
+            alertsList.push(p);
         }
 
-        // 2. Últimos Movimientos
-        const { data: recentMovs } = await supabase
-            .from('inventory_movements')
-            .select(`
-                created_at,
-                movement_type,
-                unit_code,
-                products ( name, description, part_number )
-            `)
-            .order('created_at', { ascending: false })
-            .limit(8);
+        const fam = p.internal_code || 'SIN_GRUPO';
+        if (!familiesMap[fam]) {
+            familiesMap[fam] = {
+                family_code: fam,
+                total_products: 0,
+                total_units: 0,
+                available_units: 0,
+                withdrawn_units: 0
+            };
+        }
 
-        renderDashboardRecentMovements(recentMovs || []);
+        familiesMap[fam].total_products++;
+        familiesMap[fam].total_units += pTotal;
+        familiesMap[fam].available_units += pAvail;
+        familiesMap[fam].withdrawn_units += pWithdr;
+    });
 
-    } catch (err) {
-        console.error('Error al actualizar Dashboard:', err);
-    }
+    // Actualizar Contadores Superiores
+    const elRefs = document.getElementById('dashTotalRefs');
+    const elTotal = document.getElementById('dashTotalUnits');
+    const elAvail = document.getElementById('dashAvailableUnits');
+    const elWithdr = document.getElementById('dashWithdrawnUnits');
+
+    if (elRefs) elRefs.textContent = totalRefs;
+    if (elTotal) elTotal.textContent = totalUnits;
+    if (elAvail) elAvail.textContent = availableUnits;
+    if (elWithdr) elWithdr.textContent = withdrawnUnits;
+
+    // Renderizar tarjetas de familias
+    renderFamiliesGrid(Object.values(familiesMap));
+
+    // Renderizar alertas
+    renderDashboardAlerts(alertsList);
+
+    // Renderizar últimos movimientos
+    renderDashboardRecentMovements(recentMovs);
 }
 
 /**
- * Renderiza la cuadrícula de tarjetas de familias (AF-100, OF-100, OSVK-704, etc.)
+ * Renderiza la cuadrícula de tarjetas de familias
  */
 function renderFamiliesGrid(families) {
     const container = document.getElementById('familiesGridContainer');
@@ -254,46 +315,49 @@ function renderFamiliesGrid(families) {
     if (families.length === 0) {
         container.innerHTML = `
             <div style="text-align: center; color: var(--color-text-muted); padding: 1.5rem; grid-column: 1 / -1;">
-                No hay familias de repuestos registradas todavía.
+                No hay familias de repuestos registradas todavía. Ingrese a <strong>Productos</strong> para registrar la primera.
             </div>
         `;
         return;
     }
 
-    container.innerHTML = families.map(f => {
+    // Filtrar familias: mostrar las que tienen productos/unidades, o las oficiales principales
+    const toShow = families.filter(f => f.total_products > 0 || f.total_units > 0 || INDUSTRAC_FAMILIES.includes(f.family_code));
+
+    container.innerHTML = toShow.map(f => {
         const percentAvailable = f.total_units > 0 
             ? Math.round((f.available_units / f.total_units) * 100) 
             : 0;
 
         return `
-            <div style="background: #F8FAFC; border: 1.5px solid var(--color-border); border-radius: var(--radius-md); padding: 1.15rem; transition: transform var(--transition-fast), box-shadow var(--transition-fast);">
+            <div style="background: white; border: 1.5px solid var(--color-border); border-radius: var(--radius-md); padding: 1.15rem; box-shadow: var(--shadow-sm); transition: transform var(--transition-fast);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                     <span class="code-pill" style="font-size: 1rem; font-weight: 800; background: var(--color-primary-dark); color: white;">
                         ${f.family_code}
                     </span>
                     <span style="font-size: 0.75rem; color: var(--color-text-muted); font-weight: 600;">
-                        ${f.total_products} ref.
+                        ${f.total_products} ${f.total_products === 1 ? 'producto' : 'productos'}
                     </span>
                 </div>
 
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35rem; text-align: center; margin-bottom: 0.75rem; background: white; padding: 0.65rem 0.35rem; border-radius: var(--radius-sm); border: 1px solid var(--color-border);">
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35rem; text-align: center; margin-bottom: 0.75rem; background: #F8FAFC; padding: 0.65rem 0.35rem; border-radius: var(--radius-sm); border: 1px solid var(--color-border);">
                     <div>
-                        <div style="font-size: 0.7rem; color: var(--color-text-muted); text-transform: uppercase;">Total</div>
-                        <div style="font-size: 1.15rem; font-weight: 800; color: var(--color-primary-dark);">${f.total_units}</div>
+                        <div style="font-size: 0.68rem; color: var(--color-text-muted); text-transform: uppercase;">Total</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: var(--color-primary-dark);">${f.total_units}</div>
                     </div>
                     <div>
-                        <div style="font-size: 0.7rem; color: var(--status-available); text-transform: uppercase; font-weight: 700;">Disp.</div>
-                        <div style="font-size: 1.15rem; font-weight: 800; color: var(--status-available);">${f.available_units}</div>
+                        <div style="font-size: 0.68rem; color: var(--status-available); text-transform: uppercase; font-weight: 700;">Disp.</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: var(--status-available);">${f.available_units}</div>
                     </div>
                     <div>
-                        <div style="font-size: 0.7rem; color: #64748B; text-transform: uppercase;">Retiradas</div>
-                        <div style="font-size: 1.15rem; font-weight: 800; color: #64748B;">${f.withdrawn_units}</div>
+                        <div style="font-size: 0.68rem; color: #64748B; text-transform: uppercase;">Retiradas</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: #64748B;">${f.withdrawn_units}</div>
                     </div>
                 </div>
 
                 <!-- Barra de disponibilidad física -->
-                <div style="width: 100%; height: 6px; background: #E2E8F0; border-radius: 9999px; overflow: hidden; margin-bottom: 0.5rem;">
-                    <div style="width: ${percentAvailable}%; height: 100%; background: ${percentAvailable > 20 ? 'var(--status-available)' : 'var(--status-critical)'}; transition: width 0.4s ease;"></div>
+                <div style="width: 100%; height: 6px; background: #E2E8F0; border-radius: 9999px; overflow: hidden; margin-bottom: 0.4rem;">
+                    <div style="width: ${percentAvailable}%; height: 100%; background: ${percentAvailable > 0 ? 'var(--status-available)' : '#CBD5E1'}; transition: width 0.4s ease;"></div>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--color-text-muted);">
                     <span>Disponibilidad</span>

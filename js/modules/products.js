@@ -59,6 +59,20 @@ export function saveLocalUnits(units) {
     localStorage.setItem(LOCAL_STORAGE_UNITS_KEY, JSON.stringify(units));
 }
 
+const LOCAL_STORAGE_MOVEMENTS_KEY = 'INDUSTRAC_LOCAL_MOVEMENTS';
+
+export function getLocalMovements() {
+    try {
+        return JSON.parse(localStorage.getItem(LOCAL_STORAGE_MOVEMENTS_KEY) || '[]');
+    } catch {
+        return [];
+    }
+}
+
+export function saveLocalMovements(movs) {
+    localStorage.setItem(LOCAL_STORAGE_MOVEMENTS_KEY, JSON.stringify(movs));
+}
+
 /**
  * Renderiza la vista principal del catálogo de productos
  */
