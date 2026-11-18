@@ -1,6 +1,6 @@
 /**
  * SISTEMA DE CONTROL DE ALMACÉN – INDUSTRAC S.A.C.
- * Módulo 5: Registro de Devoluciones de Repuestos al Almacén
+ * Módulo 5: Registro de Devoluciones de Repuestos al Almacén (Versión 1.3)
  */
 
 import { getSupabase } from '../config.js';
@@ -13,6 +13,7 @@ import {
     getUnitStatusBadge,
     formatDateTime
 } from '../utils/ui.js';
+import { getLocalProducts, getLocalUnits, saveLocalUnits, getLocalMovements, saveLocalMovements } from './products.js';
 
 let currentUnitForReturn = null;
 
@@ -38,7 +39,7 @@ export async function renderReturnsView(container) {
             <div style="background: #F8FAFC; padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--color-border); margin-bottom: 1.5rem;">
                 <label class="form-label">Buscar código de sticker para devolución <span class="required">*</span></label>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <input type="text" id="returnUnitCodeInput" class="form-control" placeholder="ej. AF-100-00001" style="max-width: 320px; font-weight: 700; text-transform: uppercase;">
+                    <input type="text" id="returnUnitCodeInput" class="form-control" placeholder="ej. OF-600-00001 o AF-100-00001" style="max-width: 320px; font-weight: 700; text-transform: uppercase;">
                     <button type="button" class="btn btn-primary" id="btnSearchReturnUnit">
                         <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                         Buscar Unidad
@@ -142,71 +143,99 @@ function setupReturnListeners() {
 }
 
 /**
- * Busca y valida la unidad para devolución
+ * Busca y valida la unidad para devolución (Supabase + Local)
  */
 async function lookupUnitForReturn(unitCode) {
+    const cleanCode = unitCode.trim().toUpperCase();
+    showLoading(`Buscando unidad ${cleanCode}...`);
+
     const supabase = getSupabase();
-    if (!supabase) return;
 
-    showLoading(`Buscando unidad ${unitCode}...`);
+    if (supabase) {
+        try {
+            const { data, error } = await supabase.rpc('lookup_unit_for_exit', {
+                p_unit_code: cleanCode
+            });
 
-    try {
-        const { data, error } = await supabase.rpc('lookup_unit_for_exit', {
-            p_unit_code: unitCode
-        });
+            if (!error && data) {
+                hideLoading();
 
-        hideLoading();
+                if (!data.found) {
+                    showToast('CÓDIGO NO REGISTRADO EN EL INVENTARIO.', 'error', 4500);
+                    document.getElementById('returnDetailsCard').style.display = 'none';
+                    return;
+                }
 
-        if (error) {
-            showToast(`Error al consultar: ${error.message}`, 'error');
-            return;
+                currentUnitForReturn = data;
+                renderReturnDetails(data);
+                return;
+            }
+        } catch (err) {
+            console.warn('Error consultando Supabase en devoluciones:', err);
         }
-
-        if (!data || !data.found) {
-            showToast('CÓDIGO NO REGISTRADO EN EL INVENTARIO.', 'error', 4500);
-            document.getElementById('returnDetailsCard').style.display = 'none';
-            return;
-        }
-
-        currentUnitForReturn = data;
-        const detailsCard = document.getElementById('returnDetailsCard');
-        const confirmBtn = document.getElementById('btnConfirmReturn');
-
-        document.getElementById('lblReturnCode').textContent = data.unit_code;
-        document.getElementById('lblReturnStatus').innerHTML = getUnitStatusBadge(data.status);
-        document.getElementById('lblReturnPartNumber').textContent = data.part_number;
-        document.getElementById('lblReturnDescription').textContent = `${data.name || ''} ${data.description ? `– ${data.description}` : ''}`.trim();
-        document.getElementById('lblReturnInternalCode').textContent = data.internal_code;
-        document.getElementById('lblReturnLocation').textContent = data.warehouse_location || 'No asignada';
-
-        // Solo se puede devolver si actualmente está RETIRADO
-        if (data.status !== 'RETIRADO') {
-            showToast(`LA UNIDAD NO ESTÁ RETIRADA. Actualmente se encuentra como: ${data.status}`, 'warning', 5000);
-            confirmBtn.disabled = true;
-            confirmBtn.style.opacity = '0.5';
-        } else {
-            confirmBtn.disabled = false;
-            confirmBtn.style.opacity = '1';
-        }
-
-        detailsCard.style.display = 'block';
-        detailsCard.scrollIntoView({ behavior: 'smooth' });
-
-    } catch (err) {
-        hideLoading();
-        showToast(`Error inesperado: ${err.message}`, 'error');
     }
+
+    // Consulta local
+    const localUnits = getLocalUnits();
+    const localProds = getLocalProducts();
+    const unit = localUnits.find(u => u.unit_code.toUpperCase() === cleanCode);
+
+    hideLoading();
+
+    if (!unit) {
+        showToast('CÓDIGO NO REGISTRADO EN EL INVENTARIO.', 'error', 4500);
+        document.getElementById('returnDetailsCard').style.display = 'none';
+        return;
+    }
+
+    const prod = localProds.find(p => p.id === unit.product_id || p.product_id === unit.product_id) || {};
+
+    const unitData = {
+        unit_id: unit.id,
+        unit_code: unit.unit_code,
+        status: unit.status,
+        product_id: unit.product_id,
+        internal_code: prod.internal_code || 'SIN_GRUPO',
+        part_number: prod.part_number || '-',
+        name: prod.name || prod.description || 'Producto',
+        description: prod.description || '-',
+        warehouse_location: prod.warehouse_location || 'No asignada'
+    };
+
+    currentUnitForReturn = unitData;
+    renderReturnDetails(unitData);
+}
+
+function renderReturnDetails(data) {
+    const detailsCard = document.getElementById('returnDetailsCard');
+    const confirmBtn = document.getElementById('btnConfirmReturn');
+
+    document.getElementById('lblReturnCode').textContent = data.unit_code;
+    document.getElementById('lblReturnStatus').innerHTML = getUnitStatusBadge(data.status);
+    document.getElementById('lblReturnPartNumber').textContent = data.part_number;
+    document.getElementById('lblReturnDescription').textContent = `${data.name || ''} ${data.description ? `– ${data.description}` : ''}`.trim();
+    document.getElementById('lblReturnInternalCode').textContent = data.internal_code;
+    document.getElementById('lblReturnLocation').textContent = data.warehouse_location || 'No asignada';
+
+    if (data.status !== 'RETIRADO') {
+        showToast(`LA UNIDAD NO ESTÁ RETIRADA. Actualmente se encuentra como: ${data.status}`, 'warning', 5000);
+        confirmBtn.disabled = true;
+        confirmBtn.style.opacity = '0.5';
+    } else {
+        confirmBtn.disabled = false;
+        confirmBtn.style.opacity = '1';
+    }
+
+    detailsCard.style.display = 'block';
+    detailsCard.scrollIntoView({ behavior: 'smooth' });
 }
 
 /**
- * Confirma la devolución de la unidad mediante la función atómica RPC
+ * Confirma la devolución de la unidad (Supabase + Local)
  */
 async function handleReturnSubmit(e) {
     e.preventDefault();
     if (!currentUnitForReturn) return;
-
-    const supabase = getSupabase();
-    if (!supabase) return;
 
     const unitCode = currentUnitForReturn.unit_code;
     const workerName = document.getElementById('returnWorkerName').value.trim() || null;
@@ -215,39 +244,75 @@ async function handleReturnSubmit(e) {
 
     showLoading(`Registrando devolución de ${unitCode}...`);
 
-    try {
-        const { data, error } = await supabase.rpc('register_unit_return', {
-            p_unit_code: unitCode,
-            p_worker_name: workerName,
-            p_reason: reason,
-            p_notes: notes
-        });
+    const supabase = getSupabase();
 
-        hideLoading();
+    if (supabase) {
+        try {
+            const { data, error } = await supabase.rpc('register_unit_return', {
+                p_unit_code: unitCode,
+                p_worker_name: workerName,
+                p_reason: reason,
+                p_notes: notes
+            });
 
-        if (error) {
-            showToast(`Error al procesar devolución: ${error.message}`, 'error');
-            return;
+            if (!error && data) {
+                hideLoading();
+
+                if (!data.success) {
+                    showToast(data.error, 'error');
+                    return;
+                }
+
+                showToast(`¡Devolución registrada con éxito! La unidad ${unitCode} vuelve a estar DISPONIBLE.`, 'success', 5000);
+                resetReturnCard();
+                return;
+            }
+        } catch (err) {
+            console.warn('Error en devolución Supabase:', err);
         }
-
-        if (!data.success) {
-            showToast(data.error, 'error');
-            return;
-        }
-
-        showToast(`¡Devolución registrada con éxito! La unidad ${unitCode} vuelve a estar DISPONIBLE.`, 'success', 5000);
-
-        // Limpiar
-        document.getElementById('returnDetailsCard').style.display = 'none';
-        document.getElementById('returnUnitCodeInput').value = '';
-        document.getElementById('returnWorkerName').value = '';
-        document.getElementById('returnReason').value = '';
-        document.getElementById('returnNotes').value = '';
-        currentUnitForReturn = null;
-
-    } catch (err) {
-        hideLoading();
-        showToast(`Error: ${err.message}`, 'error');
     }
+
+    // Modo local
+    const localUnits = getLocalUnits();
+    const unitIdx = localUnits.findIndex(u => u.unit_code.toUpperCase() === unitCode.toUpperCase());
+
+    if (unitIdx === -1) {
+        hideLoading();
+        showToast('CÓDIGO NO REGISTRADO EN EL INVENTARIO.', 'error');
+        return;
+    }
+
+    localUnits[unitIdx].status = 'DISPONIBLE';
+    localUnits[unitIdx].updated_at = new Date().toISOString();
+    saveLocalUnits(localUnits);
+
+    const localMovs = getLocalMovements();
+    localMovs.unshift({
+        id: 'mov_' + Date.now(),
+        movement_type: 'DEVOLUCION',
+        unit_code: unitCode,
+        worker_name: workerName,
+        reason: reason,
+        notes: notes,
+        products: {
+            name: currentUnitForReturn.name || '',
+            description: currentUnitForReturn.description || '',
+            part_number: currentUnitForReturn.part_number || ''
+        },
+        created_at: new Date().toISOString()
+    });
+    saveLocalMovements(localMovs);
+
+    hideLoading();
+    showToast(`¡Devolución registrada con éxito! La unidad ${unitCode} vuelve a estar DISPONIBLE.`, 'success', 5000);
+    resetReturnCard();
 }
 
+function resetReturnCard() {
+    document.getElementById('returnDetailsCard').style.display = 'none';
+    document.getElementById('returnUnitCodeInput').value = '';
+    document.getElementById('returnWorkerName').value = '';
+    document.getElementById('returnReason').value = '';
+    document.getElementById('returnNotes').value = '';
+    currentUnitForReturn = null;
+}

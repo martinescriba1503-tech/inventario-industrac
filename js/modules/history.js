@@ -6,6 +6,7 @@
 import { getSupabase } from '../config.js';
 import { showToast, formatDateTime } from '../utils/ui.js';
 import { exportToExcel } from '../utils/excel.js';
+import { getLocalMovements } from './products.js';
 
 let movementsData = [];
 
@@ -99,46 +100,50 @@ export async function renderHistoryView(container) {
 async function loadHistory() {
     const supabase = getSupabase();
     const tbody = document.getElementById('historyTableBody');
-    if (!supabase || !tbody) return;
+    if (!tbody) return;
 
-    try {
-        const { data, error } = await supabase
-            .from('inventory_movements')
-            .select(`
-                id,
-                created_at,
-                movement_type,
-                unit_code,
-                worker_name,
-                client_name,
-                equipment_model,
-                equipment_serial,
-                reason,
-                supplier,
-                document_reference,
-                notes,
-                user_email,
-                products (
-                    internal_code,
-                    part_number,
-                    name,
-                    description,
-                    category
-                )
-            `)
-            .order('created_at', { ascending: false })
-            .limit(300);
+    if (supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('inventory_movements')
+                .select(`
+                    id,
+                    created_at,
+                    movement_type,
+                    unit_code,
+                    worker_name,
+                    client_name,
+                    equipment_model,
+                    equipment_serial,
+                    reason,
+                    supplier,
+                    document_reference,
+                    notes,
+                    user_email,
+                    products (
+                        internal_code,
+                        part_number,
+                        name,
+                        description,
+                        category
+                    )
+                `)
+                .order('created_at', { ascending: false })
+                .limit(300);
 
-        if (error) {
-            tbody.innerHTML = `<tr><td colspan="10" style="color: var(--status-critical); text-align: center; padding: 2rem;">Error al cargar historial: ${error.message}</td></tr>`;
-            return;
+            if (!error && data && data.length > 0) {
+                movementsData = data;
+                filterAndRenderHistory();
+                return;
+            }
+        } catch (err) {
+            console.warn('Error leyendo historial de Supabase:', err);
         }
-
-        movementsData = data || [];
-        filterAndRenderHistory();
-    } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="10" style="color: var(--status-critical); text-align: center; padding: 2rem;">Error: ${err.message}</td></tr>`;
     }
+
+    // Historial local
+    movementsData = getLocalMovements();
+    filterAndRenderHistory();
 }
 
 /**
