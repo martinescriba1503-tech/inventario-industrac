@@ -25,6 +25,7 @@ let selectedProductId = null;
 export const INDUSTRAC_FAMILIES = [
     'AF-100',
     'OF-100',
+    'OF-600',
     'OSVK-704',
     'MMK-700',
     'MK-100'
@@ -214,9 +215,39 @@ export async function renderProductsView(container) {
                             </div>
                         </div>
 
-                        <div class="form-group" style="margin-bottom: 0;">
+                        <div class="form-group" style="margin-bottom: 1rem;">
                             <label class="form-label">Observaciones <span class="optional">(Opcional)</span></label>
                             <input type="text" id="formNotes" class="form-control" placeholder="Notas técnicas, referencias cruzadas o compatibilidades">
+                        </div>
+
+                        <!-- SECCIÓN: Carga de Stock Físico Inicial (ej. 50 unidades del 00001 al 00050) -->
+                        <div id="initialStockSection" style="background: #F0FDF4; border: 1.5px solid #86EFAC; border-radius: var(--radius-md); padding: 1.15rem;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+                                <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; font-weight: 700; color: #166534; font-size: 0.95rem;">
+                                    <input type="checkbox" id="chkEnableInitialStock" style="width: 18px; height: 18px; accent-color: var(--status-available);">
+                                    <span>📦 ¿Cargar stock físico existente ahora mismo?</span>
+                                </label>
+                                <span class="badge badge-disponible">Carga Masiva</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #166534; margin-bottom: 0.75rem;">
+                                Si ya tienes stickers impresos en almacén (ej. 50 filtros del 00001 al 00050), el sistema los creará automáticamente como DISPONIBLES sin registrarlos uno a uno.
+                            </p>
+
+                            <div id="initialStockInputs" style="display: none; border-top: 1px dashed #BBF7D0; padding-top: 0.75rem;">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label" style="color: #166534;">Número Correlativo Inicial</label>
+                                        <input type="number" id="initStockStart" class="form-control" value="1" min="1" placeholder="1 (generará 00001)" style="font-weight: 700;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" style="color: #166534;">Cantidad de Unidades en Stock</label>
+                                        <input type="number" id="initStockCount" class="form-control" value="50" min="1" max="1000" placeholder="ej. 50" style="font-weight: 700;">
+                                    </div>
+                                </div>
+                                <div id="initStockPreview" style="font-size: 0.85rem; font-weight: 700; color: #15803D; background: white; padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border: 1px solid #BBF7D0;">
+                                    Vista previa: Se crearán 50 unidades con estado DISPONIBLE.
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -474,8 +505,47 @@ function setupEventListeners() {
         document.getElementById('productForm').reset();
         document.getElementById('formProductId').value = '';
         document.getElementById('productModalTitle').textContent = '+ Nuevo Producto en Catálogo';
+        
+        // Resetear sección de stock inicial
+        const chk = document.getElementById('chkEnableInitialStock');
+        const inputs = document.getElementById('initialStockInputs');
+        if (chk) chk.checked = false;
+        if (inputs) inputs.style.display = 'none';
+        document.getElementById('initialStockSection').style.display = 'block';
+
         openModal('productModal');
     });
+
+    // Control de Checkbox de Stock Inicial
+    const chkInit = document.getElementById('chkEnableInitialStock');
+    const boxInit = document.getElementById('initialStockInputs');
+    const updateInitPreview = () => {
+        const group = document.getElementById('formInternalCode')?.value.trim().toUpperCase() || 'COD';
+        const prefix = group.endsWith('-') ? group : `${group}-`;
+        const start = parseInt(document.getElementById('initStockStart')?.value, 10) || 1;
+        const count = parseInt(document.getElementById('initStockCount')?.value, 10) || 0;
+        const preview = document.getElementById('initStockPreview');
+        if (!preview) return;
+
+        if (count > 0) {
+            const first = `${prefix}${start.toString().padStart(5, '0')}`;
+            const last = `${prefix}${(start + count - 1).toString().padStart(5, '0')}`;
+            preview.textContent = `Vista previa: Se crearán ${count} unidades físicas (${first} al ${last}) con estado DISPONIBLE.`;
+        } else {
+            preview.textContent = 'Ingrese una cantidad mayor a 0.';
+        }
+    };
+
+    chkInit?.addEventListener('change', () => {
+        if (boxInit) {
+            boxInit.style.display = chkInit.checked ? 'block' : 'none';
+            if (chkInit.checked) updateInitPreview();
+        }
+    });
+
+    document.getElementById('initStockStart')?.addEventListener('input', updateInitPreview);
+    document.getElementById('initStockCount')?.addEventListener('input', updateInitPreview);
+    document.getElementById('formInternalCode')?.addEventListener('input', updateInitPreview);
 
     document.getElementById('closeProductModal')?.addEventListener('click', () => closeModal('productModal'));
     document.getElementById('cancelProductBtn')?.addEventListener('click', () => closeModal('productModal'));
@@ -531,6 +601,10 @@ async function handleSaveProduct(e) {
 
     showLoading('Guardando producto...');
 
+    const hasInitialStock = !id && document.getElementById('chkEnableInitialStock')?.checked;
+    const startNum = parseInt(document.getElementById('initStockStart')?.value, 10) || 1;
+    const stockCount = parseInt(document.getElementById('initStockCount')?.value, 10) || 0;
+
     const payload = {
         internal_code,
         part_number,
@@ -552,12 +626,11 @@ async function handleSaveProduct(e) {
             if (id) {
                 res = await supabase.from('products').update(payload).eq('id', id);
             } else {
-                res = await supabase.from('products').insert([payload]);
+                res = await supabase.from('products').insert([payload]).select().single();
             }
 
-            hideLoading();
-
             if (res.error) {
+                hideLoading();
                 if (res.error.message.includes('uq_product_part_number')) {
                     showToast(`Ya existe un producto registrado con el Part Number: ${part_number}`, 'error', 5000);
                 } else {
@@ -566,8 +639,34 @@ async function handleSaveProduct(e) {
                 return;
             }
 
+            const createdProduct = res.data;
+            let batchMsg = '';
+
+            // Si se solicitó cargar stock inicial masivo
+            if (hasInitialStock && stockCount > 0 && createdProduct?.id) {
+                showLoading(`Registrando ${stockCount} stickers físicos correlativos...`);
+                const prefix = internal_code.endsWith('-') ? internal_code : `${internal_code}-`;
+                
+                try {
+                    const { data: batchRes, error: batchErr } = await supabase.rpc('register_batch_unit_range', {
+                        p_product_id: createdProduct.id,
+                        p_prefix: prefix,
+                        p_start_num: startNum,
+                        p_count: stockCount,
+                        p_notes: 'Stock inicial cargado al registrar el producto'
+                    });
+
+                    if (!batchErr && batchRes?.success) {
+                        batchMsg = ` con ${batchRes.inserted_count} unidades físicas (${batchRes.first_code} al ${batchRes.last_code})`;
+                    }
+                } catch (batchEx) {
+                    console.warn('RPC batch no disponible, recurriendo a registros unitarios:', batchEx);
+                }
+            }
+
+            hideLoading();
             closeModal('productModal');
-            showToast(`¡Producto ${name} (${internal_code}) guardado en Supabase exitosamente!`, 'success');
+            showToast(`¡Producto ${name} (${internal_code}) guardado${batchMsg}!`, 'success', 5000);
             await loadProducts();
             return;
         } catch (err) {
@@ -585,15 +684,17 @@ async function handleSaveProduct(e) {
         return;
     }
 
+    let createdId = id;
     if (id) {
         const idx = local.findIndex(p => p.id === id || p.product_id === id);
         if (idx !== -1) {
             local[idx] = { ...local[idx], ...payload };
         }
     } else {
+        createdId = 'prod_' + Date.now();
         const newProduct = {
-            id: 'prod_' + Date.now(),
-            product_id: 'prod_' + Date.now(),
+            id: createdId,
+            product_id: createdId,
             ...payload,
             created_at: new Date().toISOString()
         };
@@ -601,9 +702,36 @@ async function handleSaveProduct(e) {
     }
 
     saveLocalProducts(local);
+
+    let localBatchMsg = '';
+    if (hasInitialStock && stockCount > 0 && createdId) {
+        const localUnits = getLocalUnits();
+        const prefix = internal_code.endsWith('-') ? internal_code : `${internal_code}-`;
+        let addedCount = 0;
+
+        for (let i = 0; i < stockCount; i++) {
+            const num = (startNum + i).toString().padStart(5, '0');
+            const code = `${prefix}${num}`;
+            if (!localUnits.some(u => u.unit_code === code)) {
+                localUnits.push({
+                    id: 'unit_' + Date.now() + '_' + i,
+                    product_id: createdId,
+                    unit_code: code,
+                    status: 'DISPONIBLE',
+                    created_at: new Date().toISOString()
+                });
+                addedCount++;
+            }
+        }
+        saveLocalUnits(localUnits);
+        const first = `${prefix}${startNum.toString().padStart(5, '0')}`;
+        const last = `${prefix}${(startNum + stockCount - 1).toString().padStart(5, '0')}`;
+        localBatchMsg = ` con ${addedCount} unidades (${first} al ${last}) en estado DISPONIBLE`;
+    }
+
     hideLoading();
     closeModal('productModal');
-    showToast(`¡Producto ${name} registrado directamente en el sistema!`, 'success');
+    showToast(`¡Producto ${name} guardado${localBatchMsg}!`, 'success', 5000);
     await loadProducts();
 }
 
@@ -627,6 +755,8 @@ async function editProduct(productId) {
     document.getElementById('formNotes').value = prod.notes || '';
 
     document.getElementById('productModalTitle').textContent = `Editar Producto: ${prod.name || prod.internal_code}`;
+    const initialSection = document.getElementById('initialStockSection');
+    if (initialSection) initialSection.style.display = 'none'; // Ocultar en modo edición
     openModal('productModal');
 }
 

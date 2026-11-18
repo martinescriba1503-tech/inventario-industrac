@@ -121,53 +121,58 @@ export async function renderEntriesView(container, queryParams = '') {
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.5rem;">
                         <h3 style="font-size: 1rem; font-weight: 700; color: var(--color-primary-dark); display: flex; align-items: center; gap: 0.5rem;">
                             <span style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem;">3</span>
-                            Códigos de Stickers Físicos a Pegar en Cada Unidad
+                            Asignación de Stickers Físicos a Ingresar
                         </h3>
                         <span id="pendingCountBadge" class="badge badge-disponible">0 Unidades a Registrar</span>
                     </div>
 
-                    <!-- Modo 1: Entrada manual unitaria -->
-                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
-                        <input type="text" id="inputUnitCodeSingle" class="form-control" placeholder="Ingresar código de sticker (ej. AF-100-00001)" style="flex: 1; min-width: 240px; font-weight: 700; text-transform: uppercase;">
-                        <button type="button" class="btn btn-accent" id="btnAddSingleCode">
-                            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            Agregar Sticker
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="btnToggleBatchHelper">
-                            Generador Asistido / Pegado en Lote
-                        </button>
-                    </div>
-
-                    <!-- Modo 2: Generador Asistido de Correlativos -->
-                    <div id="batchHelperBox" style="display: none; background: white; border: 1.5px dashed var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1rem;">
-                        <div style="font-size: 0.9rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 0.5rem;">
-                            Generador Automático de Correlativos Seguros:
+                    <!-- MODO A: Generador por Rango y Cantidad (Abierto y Visible por Defecto) -->
+                    <div id="batchHelperBox" style="background: white; border: 1.5px solid var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm);">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <span style="font-size: 0.95rem; font-weight: 800; color: var(--color-primary-dark);">
+                                ⚡ Carga Masiva por Rango Correlativo (ej. 50 unidades del 00001 al 00050)
+                            </span>
+                            <span class="badge badge-proximo" style="font-size: 0.75rem;">Rápido y Seguro</span>
                         </div>
-                        <p style="font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">
-                            El correlativo inicial se sincroniza automáticamente con el último número registrado para evitar saltos o duplicados.
+                        <p style="font-size: 0.82rem; color: var(--color-text-muted); margin-bottom: 0.85rem;">
+                            Indique el número inicial y la cantidad que tiene en almacén. El sistema generará los códigos correlativos exactos sin que tenga que escribirlos uno por uno.
                         </p>
+
                         <div class="form-row">
                             <div class="form-group">
                                 <label class="form-label">Prefijo del Grupo</label>
-                                <input type="text" id="batchPrefix" class="form-control" placeholder="ej. AF-100-" style="font-weight: 700; text-transform: uppercase;">
+                                <input type="text" id="batchPrefix" class="form-control" placeholder="ej. OF-600-" style="font-weight: 800; font-size: 1rem; text-transform: uppercase;">
                             </div>
                             <div class="form-group">
                                 <label class="form-label">Número Inicial (5 dígitos)</label>
-                                <input type="number" id="batchStartNum" class="form-control" min="1" placeholder="ej. 1 o 51" style="font-weight: 700;">
+                                <input type="number" id="batchStartNum" class="form-control" min="1" value="1" placeholder="1" style="font-weight: 800; font-size: 1rem;">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Cantidad de Unidades a Recibir</label>
-                                <input type="number" id="batchCount" class="form-control" min="1" max="500" placeholder="ej. 4" style="font-weight: 700;">
+                                <label class="form-label">Cantidad de Unidades</label>
+                                <input type="number" id="batchCount" class="form-control" min="1" max="1000" value="50" placeholder="ej. 50" style="font-weight: 800; font-size: 1rem;">
                             </div>
                             <div class="form-group" style="align-self: flex-end;">
-                                <button type="button" class="btn btn-primary" id="btnGenerateBatchRange" style="width: 100%;">Generar Stickers</button>
+                                <button type="button" class="btn btn-primary" id="btnGenerateBatchRange" style="width: 100%; font-weight: 700; padding: 0.75rem 1rem;">
+                                    Generar Stickers en Lote
+                                </button>
                             </div>
                         </div>
 
-                        <div class="form-group" style="margin-bottom: 0; margin-top: 0.75rem; border-top: 1px dashed var(--color-border); padding-top: 0.75rem;">
-                            <label class="form-label">O pegar lista de stickers existentes (uno por línea):</label>
-                            <textarea id="batchTextArea" class="form-control" rows="2" placeholder="AF-100-00001&#10;AF-100-00002&#10;AF-100-00003"></textarea>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btnProcessBatchText" style="margin-top: 0.5rem;">Agregar Códigos Pegados</button>
+                        <div id="batchLivePreviewText" style="font-size: 0.85rem; font-weight: 700; color: var(--color-primary); background: #EFF6FF; padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border: 1px solid #BFDBFE; margin-top: 0.5rem;">
+                            Vista previa: Se agregarán 50 stickers a la lista.
+                        </div>
+                    </div>
+
+                    <!-- MODO B: Entrada individual / Pegado de texto (Opcional) -->
+                    <div style="background: white; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+                        <div style="font-size: 0.85rem; font-weight: 700; color: var(--color-text-main); margin-bottom: 0.5rem;">
+                            O ingresar stickers manualmente uno a uno:
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <input type="text" id="inputUnitCodeSingle" class="form-control" placeholder="Ingresar código ej. OF-600-00001" style="flex: 1; min-width: 240px; font-weight: 700; text-transform: uppercase;">
+                            <button type="button" class="btn btn-secondary" id="btnAddSingleCode">
+                                + Agregar Individual
+                            </button>
                         </div>
                     </div>
 
@@ -354,8 +359,30 @@ function setupEntryListeners() {
     const clearQueueBtn = document.getElementById('btnClearQueue');
     const form = document.getElementById('entryForm');
 
-    productSelect?.addEventListener('change', () => {
-        handleProductSelection(productSelect.value);
+    const updateBatchLivePreview = () => {
+        let prefix = document.getElementById('batchPrefix')?.value.trim().toUpperCase() || 'COD-';
+        if (!prefix.endsWith('-')) prefix += '-';
+        const start = parseInt(document.getElementById('batchStartNum')?.value, 10) || 1;
+        const count = parseInt(document.getElementById('batchCount')?.value, 10) || 0;
+        const previewEl = document.getElementById('batchLivePreviewText');
+        if (!previewEl) return;
+
+        if (count > 0) {
+            const first = `${prefix}${start.toString().padStart(5, '0')}`;
+            const last = `${prefix}${(start + count - 1).toString().padStart(5, '0')}`;
+            previewEl.textContent = `Vista previa: Se generarán ${count} stickers físicos (${first} al ${last}).`;
+        } else {
+            previewEl.textContent = 'Indique una cantidad mayor a 0.';
+        }
+    };
+
+    document.getElementById('batchPrefix')?.addEventListener('input', updateBatchLivePreview);
+    document.getElementById('batchStartNum')?.addEventListener('input', updateBatchLivePreview);
+    document.getElementById('batchCount')?.addEventListener('input', updateBatchLivePreview);
+
+    productSelect?.addEventListener('change', async () => {
+        await handleProductSelection(productSelect.value);
+        updateBatchLivePreview();
     });
 
     const addCodeFromInput = () => {

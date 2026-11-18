@@ -317,6 +317,94 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- 6.2.B RPC: REGISTRAR LOTE MASIVO DE STICKERS CORRELATIVOS (ej. OF-600-00001 a OF-600-00050)
+CREATE OR REPLACE FUNCTION public.register_batch_unit_range(
+    p_product_id UUID,
+    p_prefix TEXT,
+    p_start_num INTEGER,
+    p_count INTEGER,
+    p_supplier TEXT DEFAULT NULL,
+    p_document_reference TEXT DEFAULT NULL,
+    p_notes TEXT DEFAULT NULL
+)
+RETURNS JSON AS $$
+DECLARE
+    v_clean_prefix TEXT;
+    v_user_id UUID;
+    v_user_email TEXT;
+    v_inserted_count INTEGER := 0;
+    v_current_code TEXT;
+    v_current_num INTEGER;
+    v_unit_id UUID;
+    v_duplicates TEXT[] := ARRAY[]::TEXT[];
+BEGIN
+    v_clean_prefix := UPPER(TRIM(p_prefix));
+    IF NOT v_clean_prefix LIKE '%-' THEN
+        v_clean_prefix := v_clean_prefix || '-';
+    END IF;
+
+    IF p_count <= 0 OR p_count > 1000 THEN
+        RETURN json_build_object('success', false, 'error', 'La cantidad debe ser entre 1 y 1000 unidades.');
+    END IF;
+
+    IF p_start_num < 1 THEN
+        RETURN json_build_object('success', false, 'error', 'El número inicial debe ser mayor a 0.');
+    END IF;
+
+    v_user_id := auth.uid();
+    SELECT email INTO v_user_email FROM auth.users WHERE id = v_user_id;
+
+    FOR i IN 0..(p_count - 1) LOOP
+        v_current_num := p_start_num + i;
+        v_current_code := v_clean_prefix || lpad(v_current_num::TEXT, 5, '0');
+
+        -- Si no existe, insertar
+        IF NOT EXISTS (SELECT 1 FROM public.inventory_units WHERE unit_code = v_current_code) THEN
+            INSERT INTO public.inventory_units (product_id, unit_code, status)
+            VALUES (p_product_id, v_current_code, 'DISPONIBLE')
+            RETURNING id INTO v_unit_id;
+
+            INSERT INTO public.inventory_movements (
+                unit_id,
+                product_id,
+                unit_code,
+                movement_type,
+                quantity,
+                user_id,
+                user_email,
+                supplier,
+                document_reference,
+                notes
+            ) VALUES (
+                v_unit_id,
+                p_product_id,
+                v_current_code,
+                'INGRESO',
+                1,
+                v_user_id,
+                v_user_email,
+                p_supplier,
+                p_document_reference,
+                p_notes
+            );
+
+            v_inserted_count := v_inserted_count + 1;
+        ELSE
+            v_duplicates := array_append(v_duplicates, v_current_code);
+        END IF;
+    END LOOP;
+
+    RETURN json_build_object(
+        'success', true,
+        'inserted_count', v_inserted_count,
+        'duplicate_count', array_length(v_duplicates, 1),
+        'duplicates', v_duplicates,
+        'first_code', v_clean_prefix || lpad(p_start_num::TEXT, 5, '0'),
+        'last_code', v_clean_prefix || lpad((p_start_num + p_count - 1)::TEXT, 5, '0')
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- 6.3 RPC: CONSULTAR ESTADO DE UNIDAD ANTES DE SALIDA (Para OCR / Entrada manual)
 CREATE OR REPLACE FUNCTION public.lookup_unit_for_exit(p_unit_code TEXT)
 RETURNS JSON AS $$
