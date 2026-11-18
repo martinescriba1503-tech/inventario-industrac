@@ -6,10 +6,11 @@
 // Configuración de Supabase
 // Puedes configurar tus credenciales aquí o guardarlas desde la interfaz del sistema
 export const SUPABASE_CONFIG = {
-    // URL de tu proyecto Supabase (ej: https://xyzcompany.supabase.co)
-    url: window.localStorage.getItem('INDUSTRAC_SUPABASE_URL') || '',
+    // URL de tu proyecto Supabase (limpia sin /rest/v1)
+    url: (window.localStorage.getItem('INDUSTRAC_SUPABASE_URL') || 'https://hkenmxtwlguapsjbwwhv.supabase.co')
+        .trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, ''),
     // Clave anónima pública (anon key) de Supabase
-    anonKey: window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY') || ''
+    anonKey: (window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY') || '').trim()
 };
 
 // Variable global del cliente
@@ -21,8 +22,11 @@ let supabaseClient = null;
 export function getSupabase() {
     if (supabaseClient) return supabaseClient;
 
-    const url = SUPABASE_CONFIG.url || window.localStorage.getItem('INDUSTRAC_SUPABASE_URL');
-    const key = SUPABASE_CONFIG.anonKey || window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY');
+    const rawUrl = SUPABASE_CONFIG.url || window.localStorage.getItem('INDUSTRAC_SUPABASE_URL') || 'https://hkenmxtwlguapsjbwwhv.supabase.co';
+    const rawKey = SUPABASE_CONFIG.anonKey || window.localStorage.getItem('INDUSTRAC_SUPABASE_ANON_KEY');
+
+    const url = rawUrl.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
+    const key = rawKey ? rawKey.trim() : '';
 
     if (!url || !key) {
         return null;
@@ -47,10 +51,13 @@ export function getSupabase() {
  */
 export function saveSupabaseCredentials(url, anonKey) {
     if (!url || !anonKey) return false;
-    window.localStorage.setItem('INDUSTRAC_SUPABASE_URL', url.trim());
-    window.localStorage.setItem('INDUSTRAC_SUPABASE_ANON_KEY', anonKey.trim());
-    SUPABASE_CONFIG.url = url.trim();
-    SUPABASE_CONFIG.anonKey = anonKey.trim();
+    const cleanUrl = url.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
+    const cleanKey = anonKey.trim();
+
+    window.localStorage.setItem('INDUSTRAC_SUPABASE_URL', cleanUrl);
+    window.localStorage.setItem('INDUSTRAC_SUPABASE_ANON_KEY', cleanKey);
+    SUPABASE_CONFIG.url = cleanUrl;
+    SUPABASE_CONFIG.anonKey = cleanKey;
     supabaseClient = null; // Reiniciar para que tome las nuevas credenciales
     return getSupabase();
 }
