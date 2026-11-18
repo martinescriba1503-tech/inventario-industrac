@@ -548,3 +548,110 @@
     margin: 0 auto 1.25rem auto;
 }
 
+/* --- VISOR OCR DE ALTA VELOCIDAD ESTILO ESCÁNER LÁSER --- */
+.ocr-viewfinder-box {
+    position: relative;
+    border: 3px solid var(--color-accent);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: #000;
+    box-shadow: 0 8px 24px rgba(3, 18, 64, 0.45);
+}
+
+.ocr-target-frame {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 82%;
+    max-width: 440px;
+    height: 110px;
+    border-radius: 8px;
+    box-shadow: 0 0 0 9999px rgba(3, 18, 64, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.ocr-corner {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border-color: #14B5D9;
+    border-style: solid;
+}
+.ocr-corner.tl { top: -2px; left: -2px; border-width: 4px 0 0 4px; border-top-left-radius: 6px; }
+.ocr-corner.tr { top: -2px; right: -2px; border-width: 4px 4px 0 0; border-top-right-radius: 6px; }
+.ocr-corner.bl { bottom: -2px; left: -2px; border-width: 0 0 4px 4px; border-bottom-left-radius: 6px; }
+.ocr-corner.br { bottom: -2px; right: -2px; border-width: 0 4px 4px 0; border-bottom-right-radius: 6px; }
+
+.ocr-laser-line {
+    position: absolute;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, transparent 0%, #14B5D9 50%, transparent 100%);
+    box-shadow: 0 0 10px #14B5D9, 0 0 4px #FFFFFF;
+    animation: ocrLaserScan 1.6s ease-in-out infinite alternate;
+}
+
+@keyframes ocrLaserScan {
+    0% { top: 8%; opacity: 0.5; }
+    50% { opacity: 1; }
+    100% { top: 92%; opacity: 0.5; }
+}
+
+.ocr-guide-pill {
+    position: absolute;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(3, 18, 64, 0.88);
+    border: 1px solid var(--color-accent);
+    color: #FFFFFF;
+    padding: 0.4rem 1rem;
+    border-radius: 9999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    z-index: 10;
+    white-space: nowrap;
+}
+
+.ocr-guide-card {
+    background: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%);
+    border: 1.5px solid #BFDBFE;
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+    margin-top: 1rem;
+}
+
+.ocr-guide-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.85rem;
+    margin-top: 0.75rem;
+}
+
+.ocr-guide-item {
+    background: #FFFFFF;
+    padding: 0.75rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid #E2E8F0;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+}
+
+.ocr-guide-icon {
+    font-size: 1.3rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+

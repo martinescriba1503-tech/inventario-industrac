@@ -10,7 +10,12 @@ import {
     stopCameraStream, 
     captureAndPreprocessFrame, 
     recognizeStickerCode,
-    preprocessImageFile
+    preprocessImageFile,
+    playSuccessSound,
+    hasTorchSupport,
+    toggleTorch,
+    triggerFocus,
+    initTesseract
 } from '../ocr.js';
 import { 
     showToast, 
@@ -24,11 +29,17 @@ import { getLocalProducts, getLocalUnits, saveLocalUnits, getLocalMovements, sav
 
 let isCameraActive = false;
 let currentLookedUpUnit = null;
+let autoScanInterval = null;
+let isScanningFrame = false;
+let isTorchOn = false;
 
 /**
  * Renderiza la interfaz de Salidas
  */
 export async function renderExitsView(container) {
+    // Pre-calentar motor OCR en segundo plano para que el primer escaneo sea instantáneo
+    initTesseract().catch(() => {});
+
     container.innerHTML = `
         <div class="card" style="margin-bottom: 1.25rem;">
             <div class="card-header">
@@ -38,14 +49,14 @@ export async function renderExitsView(container) {
                         Control de Salidas de Almacén
                     </h2>
                     <p style="font-size: 0.85rem; color: var(--color-text-muted);">
-                        Escanee el sticker con la cámara de su celular o ingrese el código para autorizar el retiro de la unidad física.
+                        Escanee el sticker con la cámara del celular. Al enfocar el recuadro se detectará automáticamente con confirmación por sonido.
                     </p>
                 </div>
             </div>
 
             <!-- Botones Principales de Escaneo -->
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; padding: 1rem 0;">
-                <!-- Opción 1: Cámara en vivo con visor -->
+                <!-- Opción 1: Cámara en vivo con auto-escáner continuo -->
                 <button type="button" class="btn btn-primary btn-large-action" id="btnBigScanCamera" style="background: linear-gradient(135deg, #031240 0%, #18A2D9 100%);">
                     <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
                     ABRIR VISOR DE CÁMARA
@@ -60,40 +71,89 @@ export async function renderExitsView(container) {
                 <input type="file" id="nativeCameraInput" accept="image/*" capture="environment" style="display: none;">
             </div>
 
-            <!-- Visor de Cámara Web en Vivo (Oculto hasta presionar el botón) -->
-            <div id="cameraViewfinderContainer" style="display: none; margin-top: 1rem; border: 2.5px solid var(--color-accent); border-radius: var(--radius-lg); overflow: hidden; background: #000; position: relative;">
-                <video id="ocrVideoElement" autoplay playsinline muted style="width: 100%; max-height: 440px; object-fit: cover; display: block;"></video>
-                <canvas id="ocrCanvasElement" style="display: none;"></canvas>
+            <!-- Visor de Cámara Web en Vivo (Auto-Escáner Láser de Alta Precisión) -->
+            <div id="cameraViewfinderContainer" style="display: none; margin-top: 1rem;">
+                <div class="ocr-viewfinder-box">
+                    <video id="ocrVideoElement" autoplay playsinline muted style="width: 100%; max-height: 440px; object-fit: cover; display: block; cursor: pointer;" title="Toque la pantalla para reenfocar"></video>
+                    <canvas id="ocrCanvasElement" style="display: none;"></canvas>
 
-                <!-- Marco de Enfoque Superpuesto -->
-                <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                    <div style="width: 85%; height: 45%; border: 2.5px dashed var(--color-accent-light); border-radius: var(--radius-md); box-shadow: 0 0 0 9999px rgba(3, 18, 64, 0.45); display: flex; align-items: center; justify-content: center; position: relative;">
-                        <span style="background: rgba(3, 18, 64, 0.85); color: #fff; padding: 0.35rem 0.85rem; border-radius: 9999px; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.5px;">
-                            Enfoque el código del sticker aquí
-                        </span>
+                    <!-- Píldora de Estado en Vivo -->
+                    <div class="ocr-guide-pill" id="ocrLiveStatusPill">
+                        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10B981; animation: pulse 1.5s infinite;"></span>
+                        <span id="ocrStatusText">Escaneando automáticamente...</span>
                     </div>
-                    <p style="color: #fff; font-size: 0.8rem; margin-top: 0.75rem; text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
-                        Mantenga firme la cámara a 10-15 cm de distancia
-                    </p>
+
+                    <!-- Marco de Enfoque Láser con Proporción Rectangular del Sticker INDUSTRAC -->
+                    <div class="ocr-target-frame">
+                        <div class="ocr-corner tl"></div>
+                        <div class="ocr-corner tr"></div>
+                        <div class="ocr-corner bl"></div>
+                        <div class="ocr-corner br"></div>
+                        <div class="ocr-laser-line"></div>
+                    </div>
+
+                    <!-- Controles flotantes sobre la cámara -->
+                    <div style="position: absolute; bottom: 1rem; left: 0; right: 0; display: flex; justify-content: center; gap: 0.75rem; padding: 0 1rem; z-index: 10; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" id="btnToggleFlash" style="display: none; font-weight: 700; background: rgba(255,255,255,0.9);">
+                            🔦 Linterna: Apagada
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btnCancelCamera">
+                            Cerrar Cámara
+                        </button>
+                        <button type="button" class="btn btn-accent btn-sm" id="btnCaptureOcr" style="font-weight: 800;">
+                            ⚡ Capturar Ahora
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Controles sobre la Cámara -->
-                <div style="position: absolute; bottom: 1rem; left: 0; right: 0; display: flex; justify-content: center; gap: 0.75rem; padding: 0 1rem; z-index: 10;">
-                    <button type="button" class="btn btn-secondary btn-sm" id="btnCancelCamera">
-                        Cerrar Cámara
-                    </button>
-                    <button type="button" class="btn btn-accent" id="btnCaptureOcr" style="font-weight: 800; padding: 0.75rem 1.75rem; font-size: 1rem;">
-                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
-                        Capturar y Leer Código
-                    </button>
+                <div style="text-align: center; margin-top: 0.5rem; font-size: 0.8rem; color: var(--color-text-muted);">
+                    💡 Toque el video para re-enfocar. El sistema lee el código de forma continua.
+                </div>
+            </div>
+
+            <!-- Guía Rápida de Enfoque en Almacén (Para cajas como Atlas Copco) -->
+            <div class="ocr-guide-card">
+                <div style="font-size: 0.95rem; font-weight: 700; color: var(--color-primary-dark); display: flex; align-items: center; gap: 0.5rem;">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Recomendaciones para Escaneo Rápido con el Celular:
+                </div>
+                <div class="ocr-guide-grid">
+                    <div class="ocr-guide-item">
+                        <div class="ocr-guide-icon">📏</div>
+                        <div>
+                            <strong>Distancia Óptima:</strong><br>
+                            <span style="font-size: 0.82rem; color: var(--color-text-muted);">Mantenga el celular a <strong>12 a 18 cm</strong> (una cuarta de mano). Menos de 10 cm desenfoca el lente.</span>
+                        </div>
+                    </div>
+                    <div class="ocr-guide-item">
+                        <div class="ocr-guide-icon">🎯</div>
+                        <div>
+                            <strong>Encuadre del Sticker:</strong><br>
+                            <span style="font-size: 0.82rem; color: var(--color-text-muted);">Alinee solo el rectángulo blanco del código dentro de las esquinas turquesas para ignorar textos de la caja.</span>
+                        </div>
+                    </div>
+                    <div class="ocr-guide-item">
+                        <div class="ocr-guide-icon">💡</div>
+                        <div>
+                            <strong>Evitar Reflejos:</strong><br>
+                            <span style="font-size: 0.82rem; color: var(--color-text-muted);">Si la luz del techo produce brillo blanco sobre el sticker, incline el celular 15°. Use el botón Linterna en zonas oscuras.</span>
+                        </div>
+                    </div>
+                    <div class="ocr-guide-item">
+                        <div class="ocr-guide-icon">⚡</div>
+                        <div>
+                            <strong>Detección Automática:</strong><br>
+                            <span style="font-size: 0.82rem; color: var(--color-text-muted);">No necesita pulsar botones: al enfocar el código, sonará un pitido y se abrirá la salida al instante.</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <!-- Entrada Manual / Fallback si el sticker está dañado o no hay buena luz -->
-            <div style="margin-top: 1.5rem; background: #F8FAFC; padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+            <div style="margin-top: 1.25rem; background: #F8FAFC; padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--color-border);">
                 <label class="form-label">O buscar / ingresar sticker manualmente:</label>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <input type="text" id="manualExitCodeInput" class="form-control" placeholder="ej. OF-600-00001 o AF-100-00001" style="max-width: 320px; font-weight: 800; font-size: 1.05rem; text-transform: uppercase;">
+                    <input type="text" id="manualExitCodeInput" class="form-control" placeholder="ej. OF-600-00050 o AF-100-00001" style="max-width: 320px; font-weight: 800; font-size: 1.05rem; text-transform: uppercase;">
                     <button type="button" class="btn btn-primary" id="btnLookupManual" style="font-weight: 700;">
                         <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                         Buscar Unidad
@@ -204,9 +264,11 @@ function setupExitListeners() {
     const manualLookupBtn = document.getElementById('btnLookupManual');
     const manualInput = document.getElementById('manualExitCodeInput');
     const recheckBtn = document.getElementById('btnRecheckCode');
+    const flashBtn = document.getElementById('btnToggleFlash');
     const exitForm = document.getElementById('exitForm');
     const closeExitModalBtn = document.getElementById('closeExitModal');
     const cancelExitModalBtn = document.getElementById('cancelExitModalBtn');
+    const videoElement = document.getElementById('ocrVideoElement');
 
     // Botón Iniciar Cámara en vivo
     bigScanBtn?.addEventListener('click', async () => {
@@ -218,7 +280,27 @@ function setupExitListeners() {
         deactivateCamera();
     });
 
-    // Capturar frame de video y procesar OCR
+    // Control de Linterna (Flash)
+    flashBtn?.addEventListener('click', async () => {
+        isTorchOn = !isTorchOn;
+        const success = await toggleTorch(isTorchOn);
+        if (success) {
+            flashBtn.textContent = isTorchOn ? '🔦 Linterna: Encendida' : '🔦 Linterna: Apagada';
+            flashBtn.style.background = isTorchOn ? 'var(--color-accent)' : 'rgba(255,255,255,0.9)';
+            flashBtn.style.color = isTorchOn ? '#031240' : '#031240';
+        } else {
+            isTorchOn = false;
+            showToast('Linterna no disponible en este dispositivo.', 'info');
+        }
+    });
+
+    // Re-enfocar la cámara al tocar el video
+    videoElement?.addEventListener('click', async () => {
+        await triggerFocus();
+        showToast('Re-enfocando cámara...', 'info', 1000);
+    });
+
+    // Capturar frame de video manualmente y procesar OCR
     captureOcrBtn?.addEventListener('click', async () => {
         await processCameraOcr();
     });
@@ -241,6 +323,7 @@ function setupExitListeners() {
                 return;
             }
 
+            playSuccessSound();
             showToast(`Sticker detectado: ${recognized}`, 'success');
             await lookupAndDisplayUnit(recognized);
         } catch (err) {
@@ -295,20 +378,29 @@ function setupExitListeners() {
 }
 
 /**
- * Activa la transmisión de cámara
+ * Activa la transmisión de cámara e inicia el auto-escaneo rápido continuo
  */
 async function activateCamera() {
     const video = document.getElementById('ocrVideoElement');
     const container = document.getElementById('cameraViewfinderContainer');
+    const flashBtn = document.getElementById('btnToggleFlash');
     if (!video || !container) return;
 
     try {
         container.style.display = 'block';
         video.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        showLoading('Activando cámara con autoenfoque...');
+        showLoading('Activando cámara con autoenfoque y escáner continuo...');
         await startCameraStream(video);
         hideLoading();
         isCameraActive = true;
+
+        // Comprobar soporte de linterna
+        if (hasTorchSupport() && flashBtn) {
+            flashBtn.style.display = 'inline-flex';
+        }
+
+        // Iniciar bucle de auto-escaneo continuo
+        startAutoScanner();
     } catch (err) {
         hideLoading();
         container.style.display = 'none';
@@ -317,9 +409,14 @@ async function activateCamera() {
 }
 
 /**
- * Detiene la cámara
+ * Detiene la cámara y el bucle de auto-escaneo
  */
 function deactivateCamera() {
+    stopAutoScanner();
+    if (isTorchOn) {
+        toggleTorch(false);
+        isTorchOn = false;
+    }
     stopCameraStream();
     const container = document.getElementById('cameraViewfinderContainer');
     if (container) container.style.display = 'none';
@@ -327,7 +424,52 @@ function deactivateCamera() {
 }
 
 /**
- * Captura y ejecuta el OCR sobre el frame de video
+ * Bucle de escaneo continuo: analiza un fotograma cada 500ms
+ * Al detectar el sticker emite pitido + vibración y abre la salida automáticamente
+ */
+function startAutoScanner() {
+    stopAutoScanner();
+
+    autoScanInterval = setInterval(async () => {
+        if (!isCameraActive || isScanningFrame) return;
+
+        const video = document.getElementById('ocrVideoElement');
+        const canvas = document.getElementById('ocrCanvasElement');
+        if (!video || !canvas || video.readyState < 2 || video.videoWidth === 0) return;
+
+        isScanningFrame = true;
+        try {
+            captureAndPreprocessFrame(video, canvas);
+            const recognized = await recognizeStickerCode(canvas);
+
+            if (recognized && isCameraActive) {
+                // ¡Código detectado con éxito!
+                playSuccessSound();
+                deactivateCamera();
+                showToast(`✓ Sticker detectado: ${recognized}`, 'success', 3500);
+                await lookupAndDisplayUnit(recognized);
+            }
+        } catch (err) {
+            // Continúa en el siguiente ciclo
+        } finally {
+            isScanningFrame = false;
+        }
+    }, 550);
+}
+
+/**
+ * Detiene el bucle de auto-escaneo continuo
+ */
+function stopAutoScanner() {
+    if (autoScanInterval) {
+        clearInterval(autoScanInterval);
+        autoScanInterval = null;
+    }
+    isScanningFrame = false;
+}
+
+/**
+ * Captura manual y ejecuta el OCR sobre el frame de video
  */
 async function processCameraOcr() {
     const video = document.getElementById('ocrVideoElement');
@@ -337,18 +479,17 @@ async function processCameraOcr() {
     showLoading('Leyendo código del sticker mediante OCR...');
 
     try {
-        // Preprocesar imagen
         captureAndPreprocessFrame(video, canvas);
-
-        // Reconocer texto
         const recognizedCode = await recognizeStickerCode(canvas);
         hideLoading();
 
         if (!recognizedCode) {
-            showToast('No se pudo leer el código con claridad. Acerque la cámara o use el botón "TOMAR FOTO CON CÁMARA".', 'warning', 5000);
+            showToast('No se pudo leer el código con claridad. Asegúrese de centrar solo el sticker blanco en el marco.', 'warning', 5000);
             return;
         }
 
+        playSuccessSound();
+        deactivateCamera();
         showToast(`Sticker detectado: ${recognizedCode}`, 'info');
         await lookupAndDisplayUnit(recognizedCode);
     } catch (err) {

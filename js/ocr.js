@@ -105,7 +105,86 @@ export function stopCameraStream() {
 }
 
 /**
+ * Consulta si la cámara activa cuenta con soporte para linterna (flash LED)
+ */
+export function hasTorchSupport() {
+    if (!videoStream) return false;
+    const track = videoStream.getVideoTracks()[0];
+    const caps = track?.getCapabilities ? track.getCapabilities() : {};
+    return Boolean(caps.torch);
+}
+
+/**
+ * Activa o desactiva la linterna (flash LED) del celular
+ */
+export async function toggleTorch(turnOn) {
+    if (!videoStream) return false;
+    const track = videoStream.getVideoTracks()[0];
+    const caps = track?.getCapabilities ? track.getCapabilities() : {};
+    if (caps.torch) {
+        try {
+            await track.applyConstraints({
+                advanced: [{ torch: turnOn }]
+            });
+            return true;
+        } catch (e) {
+            console.warn('Error cambiando estado de linterna:', e);
+            return false;
+        }
+    }
+    return false;
+}
+
+/**
+ * Re-enfoca la cámara activando autoenfoque continuo al pulsar la pantalla
+ */
+export async function triggerFocus() {
+    if (!videoStream) return;
+    const track = videoStream.getVideoTracks()[0];
+    if (track && track.applyConstraints) {
+        try {
+            await track.applyConstraints({
+                advanced: [{ focusMode: 'continuous' }]
+            });
+        } catch (e) {}
+    }
+}
+
+/**
+ * Emite sonido de confirmación estilo lector láser de almacén y vibración háptica
+ */
+export function playSuccessSound() {
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+            const ctx = new AudioCtx();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(950, ctx.currentTime);
+            osc.frequency.setValueAtTime(1400, ctx.currentTime + 0.07);
+            gain.gain.setValueAtTime(0.25, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.18);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.18);
+        }
+    } catch (e) {
+        // Ignorar si audio está bloqueado por el navegador
+    }
+
+    if (navigator.vibrate) {
+        try {
+            navigator.vibrate([70, 30, 70]);
+        } catch (e) {}
+    }
+}
+
+/**
  * Captura y preprocesa el área de enfoque con escala y binarización adaptativa
+ * Calibrada exactamente a la proporción del sticker rectangular INDUSTRAC (76% ancho x 28% alto)
+ * para excluir todo el texto exterior de la caja (ej. "Atlas Copco", "1625 7526 00")
  * @param {HTMLVideoElement} videoElement Elemento de video
  * @param {HTMLCanvasElement} canvasElement Canvas destino
  * @returns {string} DataURL de la imagen procesada
@@ -117,14 +196,14 @@ export function captureAndPreprocessFrame(videoElement, canvasElement) {
     const vWidth = videoElement.videoWidth;
     const vHeight = videoElement.videoHeight;
 
-    // Área de enfoque amplia (75% ancho y 45% alto) para no cortar el texto
-    const roiWidth = Math.floor(vWidth * 0.85);
-    const roiHeight = Math.floor(vHeight * 0.45);
+    // Área de enfoque centrada con proporción exacta del sticker rectangular INDUSTRAC
+    const roiWidth = Math.floor(vWidth * 0.76);
+    const roiHeight = Math.floor(vHeight * 0.28);
     const startX = Math.floor((vWidth - roiWidth) / 2);
     const startY = Math.floor((vHeight - roiHeight) / 2);
 
-    // Escalar 1.5x para que Tesseract tenga mayor densidad de píxeles
-    const scale = 1.5;
+    // Escalar 1.4x para que Tesseract tenga densidad ideal sin sobrecargar CPU
+    const scale = 1.4;
     canvasElement.width = Math.floor(roiWidth * scale);
     canvasElement.height = Math.floor(roiHeight * scale);
 
@@ -135,7 +214,7 @@ export function captureAndPreprocessFrame(videoElement, canvasElement) {
         0, 0, canvasElement.width, canvasElement.height
     );
 
-    // Preprocesamiento de píxeles: Umbral Adaptativo Otsu / Media Local
+    // Preprocesamiento de píxeles: Umbral Adaptativo para resaltar caracteres negros sobre fondo blanco
     preprocessCanvasAdaptive(canvasElement);
 
     return canvasElement.toDataURL('image/png');
